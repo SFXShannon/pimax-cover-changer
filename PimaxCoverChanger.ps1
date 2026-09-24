@@ -189,6 +189,56 @@ function Find-Art($game, [string]$term, [bool]$exact) {
     [pscustomobject]@{ Items = $items; Note = ($notes -join ' ') }
 }
 
+# ---------- Library order (Pimax "pin to top" list) ----------
+$ClientConfig = Join-Path $env:APPDATA 'PimaxClient\config.json'
+
+function Get-PinnedIds([string]$text) {
+    if (-not $text) { if (-not (Test-Path $ClientConfig)) { return @() }; $text = [IO.File]::ReadAllText($ClientConfig) }
+    $m = [regex]::Match($text, '"pinToTopGameArray"\s*:\s*\[([^\]]*)\]')
+    if (-not $m.Success) { return @() }
+    @([regex]::Matches($m.Groups[1].Value, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value -replace '\\\\', '\' })
+}
+
+function Get-GameId($game) {
+    try { $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json; if ($j.id) { return [string]$j.id } } catch { }
+    return [IO.Path]::GetFileNameWithoutExtension($game.File)
+}
+
+# Approximates Pimax's own order: Steam by app ID, then other stores, then imports in the order added
+function Get-PimaxOrderKey($game, [string]$id) {
+    if ($id -match '^steam\.app\.(\d+)$') { return '1-{0:D12}' -f [long]$Matches[1] }
+    if ($game.Source -ne 'Imported') { return '2-' + $game.Name }
+    return '3-' + (Get-Item $game.File).CreationTime.ToString('yyyyMMddHHmmss')
+}
+
+function Save-PinnedOrder([string[]]$ids) {
+    if (-not (Test-Path $ClientConfig)) { throw "Pimax Play settings file not found: $ClientConfig" }
+    $backup = Join-Path $BackupDir 'PimaxClient-config.json.orig'
+    if (-not (Test-Path $backup)) { Copy-Item $ClientConfig $backup }
+    Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
+    $text = Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) $ids
+    [IO.File]::WriteAllText($ClientConfig, $text, $Utf8NoBom)
+}
+
+function Set-PinnedIdsInText([string]$text, [string[]]$ids) {
+    $esc = @($ids | ForEach-Object { '"' + ($_ -replace '\\', '\\' -replace '"', '\"') + '"' })
+    $arr = if ($esc.Count) { "[`n`t`t" + ($esc -join ",`n`t`t") + "`n`t]" } else { '[]' }
+    $new = '"pinToTopGameArray": ' + $arr
+    $rx = [regex]'"pinToTopGameArray"\s*:\s*\[[^\]]*\]'
+    if ($rx.IsMatch($text)) { $text = $rx.Replace($text, [Text.RegularExpressions.MatchEvaluator]{ param($m) $new }, 1) }
+    else {
+        $end = $text.LastIndexOf('}')
+        if ($end -lt 0) { throw 'Pimax Play settings file looks damaged; nothing was changed.' }
+        $head = $text.Substring(0, $end).TrimEnd()
+        $sep = if ($head.EndsWith('{')) { "`n`t" } else { ",`n`t" }
+        $text = $head + $sep + $new + "`n" + $text.Substring($end)
+    }
+    $check = Get-PinnedIds $text
+    if (($check -join '|') -ne ($ids -join '|')) { throw 'Order did not verify; nothing was changed.' }
+    return $text
+}
+
 # ---------- Window ----------
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -207,7 +257,11 @@ function Find-Art($game, [string]$term, [bool]$exact) {
 
     <DockPanel Grid.Column="0">
       <TextBlock DockPanel.Dock="Top" Text="Your Pimax library" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
-      <Button x:Name="RefreshBtn" DockPanel.Dock="Bottom" Content="Refresh list" Margin="0,8,0,0"/>
+      <Grid DockPanel.Dock="Bottom" Margin="0,8,0,0">
+        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
+        <Button x:Name="RefreshBtn" Grid.Column="0" Content="Refresh list"/>
+        <Button x:Name="OrderBtn" Grid.Column="2" Content="Library order..." Background="#1565C0" BorderBrush="#1E88E5"/>
+      </Grid>
       <ListBox x:Name="GameList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
     </DockPanel>
 
@@ -244,7 +298,7 @@ function Find-Art($game, [string]$term, [bool]$exact) {
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
 
 # Window icon: the exe's own icon, or PimaxCoverChanger.ico next to the script
 $script:AppIcon = $null
@@ -424,6 +478,142 @@ $ui.KeyBtn.Add_Click({
     catch { Set-Status "Key saved, but SteamGridDB rejected it: $($_.Exception.Message)" $true }
 })
 
+function Show-Order {
+    [xml]$ox = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Library order" Width="620" Height="700" MinWidth="520" MinHeight="480" Background="#1B1B1B" Foreground="#EDEDED"
+        FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#2E2E2E"/><Setter Property="Foreground" Value="#EDEDED"/>
+      <Setter Property="BorderBrush" Value="#444"/><Setter Property="Padding" Value="12,6"/><Setter Property="Cursor" Value="Hand"/>
+    </Style>
+  </Window.Resources>
+  <DockPanel Margin="14">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,10"
+      Text="Tick a game to pin it, and drag games to reorder. Pinned games show first in Pimax Play, in this order. Unticked games follow in Pimax's own order. Tip: Pin all, then drag, to control the whole library."/>
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+      <Button x:Name="PinAll" Content="Pin all"/>
+      <Button x:Name="UnpinAll" Content="Unpin all" Margin="6,0,0,0"/>
+      <Button x:Name="SortAZ" Content="Sort A-Z" Margin="6,0,0,0"/>
+      <Button x:Name="Up" Content="Move up" Margin="18,0,0,0"/>
+      <Button x:Name="Down" Content="Move down" Margin="6,0,0,0"/>
+    </StackPanel>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+      <Button x:Name="Cancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
+      <Button x:Name="Save" DockPanel.Dock="Right" Content="Save and restart Pimax Play" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
+      <TextBlock x:Name="Count" VerticalAlignment="Center" Foreground="#9A9A9A"/>
+    </DockPanel>
+    <ListBox x:Name="Order" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" AllowDrop="True"/>
+  </DockPanel>
+</Window>
+'@
+    $ow = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $ox))
+    if ($window.IsLoaded) { $ow.Owner = $window }
+    if ($script:AppIcon) { $ow.Icon = $script:AppIcon }
+    $lb = $ow.FindName('Order'); $count = $ow.FindName('Count')
+
+    $games = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru })
+    $pinned = @(Get-PinnedIds)
+    $byId = @{}; foreach ($g in $games) { $byId[$g.Id] = $g }
+    $unknownPins = @($pinned | Where-Object { -not $byId.ContainsKey($_) })
+    $ordered = @($pinned | Where-Object { $byId.ContainsKey($_) } | ForEach-Object { $byId[$_] })
+    $ordered += @($games | Where-Object { $pinned -notcontains $_.Id } | Sort-Object { Get-PimaxOrderKey $_ $_.Id })
+
+    $updateCount = {
+        $n = @($lb.Items | Where-Object { $_.Tag.Check.IsChecked }).Count
+        $count.Text = "$n of $($lb.Items.Count) pinned"
+    }
+    foreach ($g in $ordered) {
+        $cb = New-Object Windows.Controls.CheckBox
+        $cb.IsChecked = ($pinned -contains $g.Id); $cb.VerticalAlignment = 'Center'; $cb.Margin = '0,0,10,0'
+        $cb.Add_Click({ & $updateCount })
+        $name = New-Object Windows.Controls.TextBlock
+        $name.Text = $g.Name; $name.VerticalAlignment = 'Center'
+        $src = New-Object Windows.Controls.TextBlock
+        $src.Text = "   $($g.Source)"; $src.Foreground = '#8A8A8A'; $src.VerticalAlignment = 'Center'
+        $grip = New-Object Windows.Controls.TextBlock
+        $grip.Text = [string][char]0x2261; $grip.Foreground = '#777'; $grip.FontSize = 16; $grip.Margin = '0,0,10,0'; $grip.VerticalAlignment = 'Center'
+        $row = New-Object Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        foreach ($c in $grip, $cb, $name, $src) { [void]$row.Children.Add($c) }
+        $item = New-Object Windows.Controls.ListBoxItem
+        $item.Content = $row; $item.Padding = '6,6'; $item.Cursor = 'SizeAll'
+        $item.Tag = [pscustomobject]@{ Game = $g; Check = $cb }
+        [void]$lb.Items.Add($item)
+    }
+    & $updateCount
+
+    $findItem = {
+        param($el)
+        while ($el -and -not ($el -is [Windows.Controls.ListBoxItem])) {
+            if ($el -is [Windows.Controls.CheckBox]) { return $null }
+            $el = if ($el -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($el) } else { $el.Parent }
+        }
+        return $el
+    }
+    $script:orderDrag = $null
+    $lb.Add_PreviewMouseLeftButtonDown({ $script:orderDrag = & $findItem $_.OriginalSource; $script:orderStart = $_.GetPosition($lb) })
+    $lb.Add_PreviewMouseMove({
+        if ($_.LeftButton -ne 'Pressed' -or -not $script:orderDrag) { return }
+        $p = $_.GetPosition($lb)
+        if ([Math]::Abs($p.Y - $script:orderStart.Y) -lt 5 -and [Math]::Abs($p.X - $script:orderStart.X) -lt 5) { return }
+        $it = $script:orderDrag; $script:orderDrag = $null
+        [void][Windows.DragDrop]::DoDragDrop($lb, $it, [Windows.DragDropEffects]::Move)
+    })
+    $lb.Add_Drop({
+        $srcItem = $_.Data.GetData([Windows.Controls.ListBoxItem])
+        if (-not $srcItem) { return }
+        $target = & $findItem $_.OriginalSource
+        $to = if ($target) { $lb.Items.IndexOf($target) } else { $lb.Items.Count - 1 }
+        if ($target -eq $srcItem) { return }
+        $lb.Items.Remove($srcItem)
+        if ($to -gt $lb.Items.Count) { $to = $lb.Items.Count }
+        $lb.Items.Insert($to, $srcItem)
+        $lb.SelectedItem = $srcItem
+    })
+
+    $move = {
+        param([int]$delta)
+        $it = $lb.SelectedItem; if (-not $it) { return }
+        $i = $lb.Items.IndexOf($it); $j = $i + $delta
+        if ($j -lt 0 -or $j -ge $lb.Items.Count) { return }
+        $lb.Items.Remove($it); $lb.Items.Insert($j, $it); $lb.SelectedItem = $it; $lb.ScrollIntoView($it)
+    }
+    $ow.FindName('Up').Add_Click({ & $move -1 })
+    $ow.FindName('Down').Add_Click({ & $move 1 })
+    $ow.FindName('PinAll').Add_Click({ foreach ($it in $lb.Items) { $it.Tag.Check.IsChecked = $true }; & $updateCount })
+    $ow.FindName('UnpinAll').Add_Click({ foreach ($it in $lb.Items) { $it.Tag.Check.IsChecked = $false }; & $updateCount })
+    $ow.FindName('SortAZ').Add_Click({
+        $sorted = @($lb.Items | Sort-Object { $_.Tag.Game.Name })
+        $lb.Items.Clear(); foreach ($it in $sorted) { [void]$lb.Items.Add($it) }
+    })
+    $ow.FindName('Cancel').Add_Click({ $ow.Close() })
+    $ow.FindName('Save').Add_Click({
+        $ids = @($lb.Items | Where-Object { $_.Tag.Check.IsChecked } | ForEach-Object { $_.Tag.Game.Id }) + $unknownPins
+        $client = Get-ClientPath
+        try {
+            Save-PinnedOrder $ids
+            Start-Sleep -Seconds 1
+            if (Test-Path $client) { Start-Process $client }
+            $script:orderResult = "Library order saved ($($ids.Count) pinned). Pimax Play restarted."
+            $ow.Close()
+        } catch {
+            [Windows.MessageBox]::Show("Couldn't save the order: $($_.Exception.Message)", 'Library order', 'OK', 'Error') | Out-Null
+            if (Test-Path $client) { Start-Process $client }
+        }
+    })
+    $script:orderResult = $null
+    if ($Test) { return @($lb.Items | ForEach-Object { '{0} {1} ({2})' -f $(if ($_.Tag.Check.IsChecked) { '[x]' } else { '[ ]' }), $_.Tag.Game.Name, $_.Tag.Game.Id }) }
+    [void]$ow.ShowDialog()
+}
+
+$ui.OrderBtn.Add_Click({
+    try { Show-Order } catch { Set-Status "Library order failed: $($_.Exception.Message)" $true; return }
+    if ($script:orderResult) { Set-Status $script:orderResult }
+})
+
 $ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
 
@@ -436,13 +626,18 @@ if ($Test) {
         $g = $item.Tag
         "  {0,-45} Steam app: {1}" -f $item.Content, (Resolve-SteamAppId $g)
     }
-    $first = $ui.GameList.Items[0].Tag
-    $r = Find-Art $first $first.Name $true
-    "Find-Art exact for $($first.Name): $($r.Items.Count) items. $($r.Note)"
-    $r.Items | ForEach-Object { "    " + $_.Label + " -> " + $_.Url }
-    $r = Find-Art $first 'Half-Life 2' $false
-    "Find-Art search 'Half-Life 2': $($r.Items.Count) items. $($r.Note)"
-    $r.Items | ForEach-Object { "    " + $_.Label }
+    "--- Library order window (not shown):"
+    Show-Order | ForEach-Object { "  $_" }
+    "--- Pin list write test (in memory only):"
+    $cfg = [IO.File]::ReadAllText($ClientConfig)
+    $ids = @(Get-PimaxGames | ForEach-Object { Get-GameId $_ } | Sort-Object)
+    $out = Set-PinnedIdsInText $cfg $ids
+    $strip = { param($t) [regex]::Replace($t, '"pinToTopGameArray"\s*:\s*\[[^\]]*\]', 'X') }
+    "  rest of settings unchanged: " + ((& $strip $cfg) -eq (& $strip $out))
+    "  pinned after write: " + (Get-PinnedIds $out).Count + " of " + $ids.Count
+    $noKey = [regex]::Replace($cfg, ',\s*"pinToTopGameArray"\s*:\s*\[[^\]]*\]', '')
+    $out2 = Set-PinnedIdsInText $noKey @('a','b')
+    "  insert when missing: " + ((Get-PinnedIds $out2) -join ',') + "  tail: " + ($out2.Substring($out2.Length - 60) -replace "`n", '\n' -replace "`t", '\t')
     return
 }
 [void]$window.ShowDialog()

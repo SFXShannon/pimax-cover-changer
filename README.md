@@ -32,6 +32,16 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 
 If the automatic match is wrong, type a different name in the search box and click **Search by name**.
 
+## Library order
+
+Pimax Play normally lists Steam games by Steam app ID, then Oculus games, then imported games in the order you added them. The only order it lets you set is for **pinned** games, which always come first. **Library order...** uses that to let you arrange the whole library:
+
+- Tick games to pin them, and drag them (or use **Move up / Move down**) into the order you want.
+- **Pin all** then drag to control the entire list. **Sort A-Z** sorts alphabetically.
+- **Save and restart Pimax Play** writes the order and reopens Pimax Play.
+
+The order is saved in Pimax Play's own pinned list (`pinToTopGameArray` in `%APPDATA%\PimaxClient\config.json`). Only that list is changed; the rest of the file is left exactly as it was, and a backup is made the first time. Games you add later appear below the pinned ones until you place them.
+
 ## How it works
 
 Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`. The tile image comes from the entry's `icon` field, which accepts a web link or a local file path. This tool:
@@ -56,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.0.1
+Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.1.0
 ```
 
 ## License
