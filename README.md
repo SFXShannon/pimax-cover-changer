@@ -40,9 +40,9 @@ If the automatic match is wrong, type a different name in the search box and cli
 
 Pimax Play normally lists Steam games by Steam app ID, then Oculus games, then imported games in the order you added them. The only order it lets you set is for **pinned** games, which always come first. **Library order...** uses that to let you arrange the whole library:
 
-![Library order](screenshots/library-order.png)
+![Library order](screenshots/library-order-v1.4.2.png)
 
-- Tick games to pin them, and drag them (or use **Move up / Move down**) into the order you want.
+- Tick games to pin them, and drag them into the order you want. While dragging, hold near the top or bottom edge of the list to scroll. **Move up / Move down** and **Move to top / Move to bottom** move the selected game without dragging.
 - **Pin all** then drag to control the entire list. **Sort A-Z** sorts alphabetically.
 - **Save and restart Pimax Play** writes the order and reopens Pimax Play.
 
@@ -107,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.2
 ```
 
 ## License

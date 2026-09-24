@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.4.1'
+$AppVersion = '1.4.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -789,11 +789,20 @@ $ui.KeyBtn.Add_Click({
     catch { Set-Status "Key saved, but SteamGridDB rejected it: $($_.Exception.Message)" $true }
 })
 
+function Get-ScrollViewer($el) {
+    if ($el -is [Windows.Controls.ScrollViewer]) { return $el }
+    for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($el); $i++) {
+        $r = Get-ScrollViewer ([Windows.Media.VisualTreeHelper]::GetChild($el, $i))
+        if ($r) { return $r }
+    }
+    return $null
+}
+
 function Show-Order {
     [xml]$ox = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Library order" Width="620" Height="700" MinWidth="520" MinHeight="480" Background="#1B1B1B" Foreground="#EDEDED"
+        Title="Library order" Width="780" Height="700" MinWidth="700" MinHeight="480" Background="#1B1B1B" Foreground="#EDEDED"
         FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
   <Window.Resources>
     <Style TargetType="Button">
@@ -810,6 +819,8 @@ function Show-Order {
       <Button x:Name="SortAZ" Content="Sort A-Z" Margin="6,0,0,0"/>
       <Button x:Name="Up" Content="Move up" Margin="18,0,0,0"/>
       <Button x:Name="Down" Content="Move down" Margin="6,0,0,0"/>
+      <Button x:Name="Top" Content="Move to top" Margin="6,0,0,0"/>
+      <Button x:Name="Bottom" Content="Move to bottom" Margin="6,0,0,0"/>
     </StackPanel>
     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
       <Button x:Name="Cancel" DockPanel.Dock="Right" Content="Cancel" Margin="8,0,0,0"/>
@@ -820,26 +831,26 @@ function Show-Order {
   </DockPanel>
 </Window>
 '@
-    $ow = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $ox))
-    if ($window.IsLoaded) { $ow.Owner = $window }
-    if ($script:AppIcon) { $ow.Icon = $script:AppIcon }
-    $lb = $ow.FindName('Order'); $count = $ow.FindName('Count')
+    $script:ow = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $ox))
+    if ($window.IsLoaded) { $script:ow.Owner = $window }
+    if ($script:AppIcon) { $script:ow.Icon = $script:AppIcon }
+    $script:lb = $script:ow.FindName('Order'); $script:count = $script:ow.FindName('Count')
 
     $games = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru })
     $pinned = @(Get-PinnedIds)
     $byId = @{}; foreach ($g in $games) { $byId[$g.Id] = $g }
-    $unknownPins = @($pinned | Where-Object { -not $byId.ContainsKey($_) })
+    $script:unknownPins = @($pinned | Where-Object { -not $byId.ContainsKey($_) })
     $ordered = @($pinned | Where-Object { $byId.ContainsKey($_) } | ForEach-Object { $byId[$_] })
     $ordered += @($games | Where-Object { $pinned -notcontains $_.Id } | Sort-Object { Get-PimaxOrderKey $_ $_.Id })
 
-    $updateCount = {
-        $n = @($lb.Items | Where-Object { $_.Tag.Check.IsChecked }).Count
-        $count.Text = "$n of $($lb.Items.Count) pinned"
+    $script:updateCount = {
+        $n = @($script:lb.Items | Where-Object { $_.Tag.Check.IsChecked }).Count
+        $script:count.Text = "$n of $($script:lb.Items.Count) pinned"
     }
     foreach ($g in $ordered) {
         $cb = New-Object Windows.Controls.CheckBox
         $cb.IsChecked = ($pinned -contains $g.Id); $cb.VerticalAlignment = 'Center'; $cb.Margin = '0,0,10,0'
-        $cb.Add_Click({ & $updateCount })
+        $cb.Add_Click({ & $script:updateCount })
         $name = New-Object Windows.Controls.TextBlock
         $name.Text = $g.Name; $name.VerticalAlignment = 'Center'
         $src = New-Object Windows.Controls.TextBlock
@@ -852,11 +863,11 @@ function Show-Order {
         $item = New-Object Windows.Controls.ListBoxItem
         $item.Content = $row; $item.Padding = '6,6'; $item.Cursor = 'SizeAll'
         $item.Tag = [pscustomobject]@{ Game = $g; Check = $cb }
-        [void]$lb.Items.Add($item)
+        [void]$script:lb.Items.Add($item)
     }
-    & $updateCount
+    & $script:updateCount
 
-    $findItem = {
+    $script:findItem = {
         param($el)
         while ($el -and -not ($el -is [Windows.Controls.ListBoxItem])) {
             if ($el -is [Windows.Controls.CheckBox]) { return $null }
@@ -865,44 +876,69 @@ function Show-Order {
         return $el
     }
     $script:orderDrag = $null
-    $lb.Add_PreviewMouseLeftButtonDown({ $script:orderDrag = & $findItem $_.OriginalSource; $script:orderStart = $_.GetPosition($lb) })
-    $lb.Add_PreviewMouseMove({
+    $script:lb.Add_PreviewMouseLeftButtonDown({ $script:orderDrag = & $script:findItem $_.OriginalSource; $script:orderStart = $_.GetPosition($script:lb) })
+    $script:lb.Add_PreviewMouseMove({
         if ($_.LeftButton -ne 'Pressed' -or -not $script:orderDrag) { return }
-        $p = $_.GetPosition($lb)
+        $p = $_.GetPosition($script:lb)
         if ([Math]::Abs($p.Y - $script:orderStart.Y) -lt 5 -and [Math]::Abs($p.X - $script:orderStart.X) -lt 5) { return }
         $it = $script:orderDrag; $script:orderDrag = $null
-        [void][Windows.DragDrop]::DoDragDrop($lb, $it, [Windows.DragDropEffects]::Move)
+        [void][Windows.DragDrop]::DoDragDrop($script:lb, $it, [Windows.DragDropEffects]::Move)
     })
-    $lb.Add_Drop({
+    $script:lb.Add_Drop({
         $srcItem = $_.Data.GetData([Windows.Controls.ListBoxItem])
         if (-not $srcItem) { return }
-        $target = & $findItem $_.OriginalSource
-        $to = if ($target) { $lb.Items.IndexOf($target) } else { $lb.Items.Count - 1 }
+        $target = & $script:findItem $_.OriginalSource
+        $to = if ($target) { $script:lb.Items.IndexOf($target) } else { $script:lb.Items.Count - 1 }
         if ($target -eq $srcItem) { return }
-        $lb.Items.Remove($srcItem)
-        if ($to -gt $lb.Items.Count) { $to = $lb.Items.Count }
-        $lb.Items.Insert($to, $srcItem)
-        $lb.SelectedItem = $srcItem
+        $script:lb.Items.Remove($srcItem)
+        if ($to -gt $script:lb.Items.Count) { $to = $script:lb.Items.Count }
+        $script:lb.Items.Insert($to, $srcItem)
+        $script:lb.SelectedItem = $srcItem
+    })
+    # Scroll the list while dragging near its top or bottom edge (faster the closer to the edge)
+    $script:orderSv = $null; $script:orderLastScroll = 0
+    $script:lb.Add_DragOver({
+        $_.Effects = [Windows.DragDropEffects]::Move
+        if (-not $script:orderSv) { $script:orderSv = Get-ScrollViewer $this }
+        $sv = $script:orderSv; if (-not $sv) { return }
+        $y = $_.GetPosition($this).Y; $zone = 50; $h = $this.ActualHeight
+        $dir = 0; $dist = 0
+        if ($y -lt $zone) { $dir = -1; $dist = $zone - $y } elseif ($y -gt $h - $zone) { $dir = 1; $dist = $y - ($h - $zone) }
+        if ($dir -eq 0) { return }
+        $interval = 40 + (1 - [Math]::Min(1, $dist / $zone)) * 160
+        $now = [Environment]::TickCount
+        if ($now - $script:orderLastScroll -lt $interval) { return }
+        $script:orderLastScroll = $now
+        if ($dir -lt 0) { $sv.LineUp() } else { $sv.LineDown() }
     })
 
-    $move = {
+    $script:move = {
         param([int]$delta)
-        $it = $lb.SelectedItem; if (-not $it) { return }
-        $i = $lb.Items.IndexOf($it); $j = $i + $delta
-        if ($j -lt 0 -or $j -ge $lb.Items.Count) { return }
-        $lb.Items.Remove($it); $lb.Items.Insert($j, $it); $lb.SelectedItem = $it; $lb.ScrollIntoView($it)
+        $it = $script:lb.SelectedItem; if (-not $it) { return }
+        $i = $script:lb.Items.IndexOf($it); $j = $i + $delta
+        if ($j -lt 0 -or $j -ge $script:lb.Items.Count) { return }
+        $script:lb.Items.Remove($it); $script:lb.Items.Insert($j, $it); $script:lb.SelectedItem = $it; $script:lb.ScrollIntoView($it)
     }
-    $ow.FindName('Up').Add_Click({ & $move -1 })
-    $ow.FindName('Down').Add_Click({ & $move 1 })
-    $ow.FindName('PinAll').Add_Click({ foreach ($it in $lb.Items) { $it.Tag.Check.IsChecked = $true }; & $updateCount })
-    $ow.FindName('UnpinAll').Add_Click({ foreach ($it in $lb.Items) { $it.Tag.Check.IsChecked = $false }; & $updateCount })
-    $ow.FindName('SortAZ').Add_Click({
-        $sorted = @($lb.Items | Sort-Object { $_.Tag.Game.Name })
-        $lb.Items.Clear(); foreach ($it in $sorted) { [void]$lb.Items.Add($it) }
+    $script:ow.FindName('Up').Add_Click({ & $script:move -1 })
+    $script:ow.FindName('Down').Add_Click({ & $script:move 1 })
+    $script:moveTo = {
+        param([bool]$toTop)
+        $it = $script:lb.SelectedItem; if (-not $it) { return }
+        $script:lb.Items.Remove($it)
+        if ($toTop) { $script:lb.Items.Insert(0, $it) } else { [void]$script:lb.Items.Add($it) }
+        $script:lb.SelectedItem = $it; $script:lb.ScrollIntoView($it)
+    }
+    $script:ow.FindName('Top').Add_Click({ & $script:moveTo $true })
+    $script:ow.FindName('Bottom').Add_Click({ & $script:moveTo $false })
+    $script:ow.FindName('PinAll').Add_Click({ foreach ($it in $script:lb.Items) { $it.Tag.Check.IsChecked = $true }; & $script:updateCount })
+    $script:ow.FindName('UnpinAll').Add_Click({ foreach ($it in $script:lb.Items) { $it.Tag.Check.IsChecked = $false }; & $script:updateCount })
+    $script:ow.FindName('SortAZ').Add_Click({
+        $sorted = @($script:lb.Items | Sort-Object { $_.Tag.Game.Name })
+        $script:lb.Items.Clear(); foreach ($it in $sorted) { [void]$script:lb.Items.Add($it) }
     })
-    $ow.FindName('Cancel').Add_Click({ $ow.Close() })
-    $ow.FindName('Save').Add_Click({
-        $ids = @($lb.Items | Where-Object { $_.Tag.Check.IsChecked } | ForEach-Object { $_.Tag.Game.Id }) + $unknownPins
+    $script:ow.FindName('Cancel').Add_Click({ $script:ow.Close() })
+    $script:ow.FindName('Save').Add_Click({
+        $ids = @($script:lb.Items | Where-Object { $_.Tag.Check.IsChecked } | ForEach-Object { $_.Tag.Game.Id }) + $script:unknownPins
         $client = Get-ClientPath
         try {
             Save-PinnedOrder $ids
@@ -910,15 +946,16 @@ function Show-Order {
             Start-Sleep -Seconds 1
             if (Test-Path $client) { Start-Process $client }
             $script:orderResult = "Library order saved ($($ids.Count) pinned). Pimax Play restarted."
-            $ow.Close()
+            $script:ow.Close()
         } catch {
             [Windows.MessageBox]::Show("Couldn't save the order: $($_.Exception.Message)", 'Library order', 'OK', 'Error') | Out-Null
             if (Test-Path $client) { Start-Process $client }
         }
     })
     $script:orderResult = $null
-    if ($Test) { return @($lb.Items | ForEach-Object { '{0} {1} ({2})' -f $(if ($_.Tag.Check.IsChecked) { '[x]' } else { '[ ]' }), $_.Tag.Game.Name, $_.Tag.Game.Id }) }
-    [void]$ow.ShowDialog()
+    if ($Test) { return @($script:lb.Items | ForEach-Object { '{0} {1} ({2})' -f $(if ($_.Tag.Check.IsChecked) { '[x]' } else { '[ ]' }), $_.Tag.Game.Name, $_.Tag.Game.Id }) }
+    if ($script:Capture) { $script:orderWin = $script:ow; return }
+    [void]$script:ow.ShowDialog()
 }
 
 $ui.OrderBtn.Add_Click({
