@@ -2,6 +2,8 @@
 
 A small Windows tool for setting custom library images (cover art) in **Pimax Play**, especially for games you added with **Import**, which otherwise show the default gamepad tile.
 
+![Pimax Cover Changer](screenshots/main-window.png)
+
 ## Download
 
 Grab **`PimaxCoverChanger.exe`** from this repo and run it. It asks for admin rights because it restarts the Pimax service so the new image shows up.
@@ -22,6 +24,8 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 ## Find image
 
 **Find image** shows a gallery of matching art. Click one to use it.
+
+![Find image](screenshots/find-image.png)
 
 - **Steam:** If the game is a Steam game, or an imported game whose .exe sits in a Steam library folder, the tool reads Steam's install records to get the exact game and shows its official banners. Otherwise it searches the Steam store by name. No account needed.
 - **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key...** button. The key is stored locally in `%APPDATA%\Pimax\cover-changer-settings.json`.
@@ -54,5 +58,9 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 Install-Module ps2exe -Scope CurrentUser
 Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.1.0
 ```
+
+## License
+
+[MIT](LICENSE)
 
 Not affiliated with Pimax or Valve. Game art belongs to its respective owners.
