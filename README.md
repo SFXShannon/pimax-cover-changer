@@ -46,7 +46,9 @@ The order is saved in Pimax Play's own pinned list (`pinToTopGameArray` in `%APP
 
 ## Updates
 
-When the app opens, it checks this repo for a newer release in the background. If there is one, a bar at the top offers a **Download** button that opens the release page. Nothing is downloaded or installed automatically, and the check is skipped silently when you're offline.
+When the app opens, it checks this repo for a newer release in the background. If there is one, a bar at the top offers a **Download** button that opens the release page. Nothing is downloaded or installed automatically.
+
+The bottom-right corner shows the app version and whether it's **Up to date**, has an **Update available**, or **Couldn't check** (for example when offline). Click it to check again.
 
 ## How it works
 
@@ -72,7 +74,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.2.0
+Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.2.1
 ```
 
 ## License

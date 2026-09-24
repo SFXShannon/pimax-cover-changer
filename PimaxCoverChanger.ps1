@@ -21,7 +21,7 @@ $ServiceName = 'PiServiceLauncher'
 $DefaultClient = 'C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe'
 foreach ($d in $CoverDir, $BackupDir) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.2.0'
+$AppVersion = '1.2.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-cover-changer/releases/latest'
 
 # ---------- Library ----------
@@ -302,14 +302,18 @@ function Set-PinnedIdsInText([string]$text, [string[]]$ids) {
       </Border>
     </DockPanel>
 
-    <TextBlock x:Name="Status" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0" Foreground="#8BC34A" TextWrapping="Wrap"
-               Text="Wide banner images (about 460x215 or 920x430) fit Pimax tiles best."/>
+    <DockPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0">
+      <TextBlock x:Name="VersionLabel" DockPanel.Dock="Right" Margin="16,0,0,0" Foreground="#8A8A8A" Cursor="Hand"
+                 VerticalAlignment="Bottom" ToolTip="Click to check for updates"/>
+      <TextBlock x:Name="Status" Foreground="#8BC34A" TextWrapping="Wrap"
+                 Text="Wide banner images (about 460x215 or 920x430) fit Pimax tiles best."/>
+    </DockPanel>
   </Grid>
 </Window>
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Cover Changer $AppVersion"
 
 # Window icon: the exe's own icon, or PimaxCoverChanger.ico next to the script
@@ -634,19 +638,31 @@ function Get-UpdateInfo($release) {
     [pscustomobject]@{ Version = $latest.ToString(); Url = [string]$release.html_url }
 }
 
+function Set-VersionLabel([string]$state) {
+    $l = $ui.VersionLabel
+    $l.TextDecorations = $null
+    switch ($state) {
+        'checking'  { $l.Text = "v$AppVersion  -  Checking for updates..."; $l.Foreground = '#8A8A8A' }
+        'current'   { $l.Text = "v$AppVersion  -  Up to date " + [char]0x2713; $l.Foreground = '#8BC34A' }
+        'available' { $l.Text = "v$AppVersion  -  Update available"; $l.Foreground = '#42A5F5'; $l.TextDecorations = [Windows.TextDecorations]::Underline }
+        default     { $l.Text = "v$AppVersion  -  Couldn't check for updates"; $l.Foreground = '#8A8A8A' }
+    }
+    $script:VersionState = $state
+}
+
 function Show-UpdateNotice($release) {
     $info = Get-UpdateInfo $release
-    if (-not $info) { return }
+    if (-not $info) { Set-VersionLabel 'current'; return }
     $script:UpdateUrl = $info.Url
     $ui.UpdateText.Text = "Version $($info.Version) of Pimax Cover Changer is available (you have $AppVersion)."
     $ui.UpdateBar.Visibility = 'Visible'
+    Set-VersionLabel 'available'
 }
 
-$ui.UpdateBtn.Add_Click({ if ($script:UpdateUrl) { Start-Process $script:UpdateUrl } })
-$ui.UpdateClose.Add_Click({ $ui.UpdateBar.Visibility = 'Collapsed' })
-
-# Download in the background; a timer on the UI thread picks up the result (offline = silently skipped)
-$window.Add_Loaded({
+# Download in the background; a timer on the UI thread picks up the result
+function Start-UpdateCheck {
+    if ($script:VersionState -eq 'checking') { return }
+    Set-VersionLabel 'checking'
     try {
         $wc = New-Object Net.WebClient
         $wc.Headers.Add('User-Agent', 'pimax-cover-changer')
@@ -657,16 +673,24 @@ $window.Add_Loaded({
         $script:UpdatePoll.Interval = [TimeSpan]::FromMilliseconds(500)
         $script:UpdatePoll.Add_Tick({
             if (-not $script:UpdateTask.IsCompleted) {
-                if (((Get-Date) - $script:UpdateStarted).TotalSeconds -gt 30) { $script:UpdatePoll.Stop() }
+                if (((Get-Date) - $script:UpdateStarted).TotalSeconds -gt 30) { $script:UpdatePoll.Stop(); Set-VersionLabel 'failed' }
                 return
             }
             $script:UpdatePoll.Stop()
-            if ($script:UpdateTask.Status -ne 'RanToCompletion') { return }
-            try { Show-UpdateNotice ($script:UpdateTask.Result | ConvertFrom-Json) } catch { }
+            if ($script:UpdateTask.Status -ne 'RanToCompletion') { Set-VersionLabel 'failed'; return }
+            try { Show-UpdateNotice ($script:UpdateTask.Result | ConvertFrom-Json) } catch { Set-VersionLabel 'failed' }
         })
         $script:UpdatePoll.Start()
-    } catch { }
+    } catch { Set-VersionLabel 'failed' }
+}
+
+$ui.UpdateBtn.Add_Click({ if ($script:UpdateUrl) { Start-Process $script:UpdateUrl } })
+$ui.UpdateClose.Add_Click({ $ui.UpdateBar.Visibility = 'Collapsed' })
+$ui.VersionLabel.Add_MouseLeftButtonUp({
+    if ($script:VersionState -eq 'available' -and $script:UpdateUrl) { Start-Process $script:UpdateUrl }
+    else { Start-UpdateCheck }
 })
+$window.Add_Loaded({ Start-UpdateCheck })
 
 $ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
