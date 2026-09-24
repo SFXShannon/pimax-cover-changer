@@ -1,10 +1,10 @@
 # Pimax Game Manager
 
-A Windows tool for managing your **Pimax Play** library: set custom cover images (including for games added with **Import**), arrange the library in any order, and edit per-game settings for many games at once.
+A Windows tool for managing your **Pimax Play** library: set custom cover images (including for games added with **Import**), arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
 
 *Formerly Pimax Cover Changer.*
 
-![Pimax Game Manager](screenshots/main-window-v1.3.1.png)
+![Pimax Game Manager](screenshots/main-window-v1.4.0.png)
 
 ## Download
 
@@ -30,7 +30,7 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 ![Find image](screenshots/find-image.png)
 
 - **Steam:** If the game is a Steam game, or an imported game whose .exe sits in a Steam library folder, the tool reads Steam's install records to get the exact game and shows its official banners. Otherwise it searches the Steam store by name. No account needed.
-- **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key...** button. The key is stored locally in `%APPDATA%\Pimax\cover-changer-settings.json`.
+- **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key...** button. The key is stored locally in `%APPDATA%\PimaxGameManager\settings.json`.
 
 If the automatic match is wrong, type a different name in the search box and click **Search by name**.
 
@@ -61,7 +61,19 @@ Pimax Play lets you give each game its own graphics settings, one game at a time
 
 Settings covered: image quality and render resolution, overlay render factor, Quad View, FOV crop, center rendering, GPU upscaling (algorithm, ratio, sharpness), Smart Smoothing, lock to half refresh rate, and color tone. Games with their own settings are marked with `*` in the list. Advanced fine-tuning (custom Quad View and FOV values, color channels) is kept as-is and is still edited in Pimax Play.
 
-Settings live in `%APPDATA%\Pimax\AppConfig` (`global.json` plus one file per game, named by the game's ID). Each file is backed up to `%APPDATA%\Pimax\cover-backups\settings` before its first change.
+Settings live in `%APPDATA%\Pimax\AppConfig` (`global.json` plus one file per game, named by the game's ID). Each file is backed up to `%APPDATA%\PimaxGameManager\backups\settings` before its first change.
+
+## Backup & restore
+
+Pimax updates sometimes reset library images, the library order or game settings. Pimax Game Manager keeps its own backups so you can put them back.
+
+![Backup & restore](screenshots/backup-restore-v1.4.0.png)
+
+- **Automatic backups:** every time you apply an image, save the library order or save game settings, and each time you open the app, a backup is saved (only when something changed). The newest 20 automatic backups are kept; ones you make with **Back up now** are kept until you delete them.
+- **Reset detection:** when the app opens it compares Pimax with your latest backup. If images, the order or settings files have gone missing, an orange bar offers to **Restore** them.
+- **Restore:** in **Backup & restore...**, pick a backup and choose what to restore: library images, library order, game settings, or any mix. Your current state is backed up first, so a restore can be undone. Games that were removed and imported again get a new ID in Pimax; they are matched by their .exe path.
+
+Backups are stored in %APPDATA%\PimaxGameManager\snapshots, outside Pimax's folders. Each one is a folder with the images, the settings files and a snapshot.json describing the library order and which image goes with which game.
 
 ## Updates
 
@@ -73,8 +85,8 @@ The bottom-right corner shows the app version and whether it's **Up to date**, h
 
 Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`. The tile image comes from the entry's `icon` field, which accepts a web link or a local file path. This tool:
 
-- copies the chosen image to `%APPDATA%\Pimax\covers` so it keeps working offline and if the original moves,
-- backs up the original entry to `%APPDATA%\Pimax\cover-backups` the first time you change it,
+- copies the chosen image to `%APPDATA%\PimaxGameManager\covers` so it keeps working offline, if the original moves, and if Pimax clears its own folder,
+- backs up the original entry to `%APPDATA%\PimaxGameManager\backups` the first time you change it,
 - writes files back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
 - restarts Pimax: it stops Pimax Play, the `PiServiceLauncher` service and `PiPlayService.exe` (which holds the library and settings in memory and survives a plain service restart), then starts them again. Game settings are written while Pimax is stopped so it can't overwrite them.
 
@@ -93,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.3.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.0
 ```
 
 ## License

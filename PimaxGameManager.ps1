@@ -15,13 +15,28 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 
 $PimaxDir    = Join-Path $env:APPDATA 'Pimax'
 $ManifestDir = Join-Path $PimaxDir 'manifest'
-$CoverDir    = Join-Path $PimaxDir 'covers'
-$BackupDir   = Join-Path $PimaxDir 'cover-backups'
+# The app's own data lives outside Pimax's folder so a Pimax update can't wipe it
+$DataDir     = Join-Path $env:APPDATA 'PimaxGameManager'
+$CoverDir    = Join-Path $DataDir 'covers'
+$BackupDir   = Join-Path $DataDir 'backups'
+$SnapshotDir = Join-Path $DataDir 'snapshots'
+$LegacyBackupDir = Join-Path $PimaxDir 'cover-backups'
 $ServiceName = 'PiServiceLauncher'
 $DefaultClient = 'C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe'
-foreach ($d in $CoverDir, $BackupDir) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
+foreach ($d in $DataDir, $CoverDir, $BackupDir, $SnapshotDir) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
+# One-time carry-over from older versions (copies only; nothing is deleted)
+try {
+    if (Test-Path $LegacyBackupDir) {
+        foreach ($f in Get-ChildItem $LegacyBackupDir -Recurse -File) {
+            $dst = Join-Path $BackupDir $f.FullName.Substring($LegacyBackupDir.Length).TrimStart('\')
+            if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null; Copy-Item -LiteralPath $f.FullName $dst }
+        }
+    }
+    $legacyCfg = Join-Path $PimaxDir 'cover-changer-settings.json'; $newCfg = Join-Path $DataDir 'settings.json'
+    if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
+} catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.3.1'
+$AppVersion = '1.4.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -104,6 +119,7 @@ function Save-Cover($game, [string]$source) {
 
 function Restore-Cover($game) {
     $backup = Join-Path $BackupDir ([IO.Path]::GetFileName($game.File) + '.orig')
+    if (-not (Test-Path $backup)) { $backup = Join-Path $LegacyBackupDir ([IO.Path]::GetFileName($game.File) + '.orig') }
     if (-not (Test-Path $backup)) { throw 'No backup for this game - it still has its original image.' }
     Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
@@ -112,14 +128,18 @@ function Restore-Cover($game) {
 }
 
 # ---------- Image finder (Steam + SteamGridDB) ----------
-$SettingsFile = Join-Path $PimaxDir 'cover-changer-settings.json'
-function Get-SgdbKey {
-    try { $k = ([IO.File]::ReadAllText($SettingsFile) | ConvertFrom-Json).sgdbKey; if ($k) { return [string]$k } } catch { }
-    return ''
+$SettingsFile = Join-Path $DataDir 'settings.json'
+function Get-AppSetting([string]$name) {
+    try { return ([IO.File]::ReadAllText($SettingsFile) | ConvertFrom-Json).$name } catch { return $null }
 }
-function Set-SgdbKey([string]$key) {
-    [IO.File]::WriteAllText($SettingsFile, ([pscustomobject]@{ sgdbKey = $key } | ConvertTo-Json), $Utf8NoBom)
+function Set-AppSetting([string]$name, $value) {
+    $o = [ordered]@{}
+    try { $j = [IO.File]::ReadAllText($SettingsFile) | ConvertFrom-Json; foreach ($p in $j.PSObject.Properties) { $o[$p.Name] = $p.Value } } catch { }
+    $o[$name] = $value
+    [IO.File]::WriteAllText($SettingsFile, ([pscustomobject]$o | ConvertTo-Json), $Utf8NoBom)
 }
+function Get-SgdbKey { $k = Get-AppSetting 'sgdbKey'; if ($k) { return [string]$k }; return '' }
+function Set-SgdbKey([string]$key) { Set-AppSetting 'sgdbKey' $key }
 
 function Resolve-SteamAppId($game) {
     $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
@@ -337,6 +357,168 @@ function Invoke-WhilePimaxStopped([scriptblock]$action) {
     return $svcOk
 }
 
+# ---------- Backups (snapshots of images, library order and game settings) ----------
+function Get-Route($game) {
+    try { return [string](([IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json).route) } catch { return '' }
+}
+
+function Test-HasOrigBackup($game) {
+    $n = [IO.Path]::GetFileName($game.File) + '.orig'
+    return (Test-Path (Join-Path $BackupDir $n)) -or (Test-Path (Join-Path $LegacyBackupDir $n))
+}
+
+# Games whose tile image was customised: any image on an imported game, or any image this app replaced
+function Get-CustomImages {
+    foreach ($g in Get-PimaxGames) {
+        $icon = [string]$g.Icon
+        if (-not $icon) { continue }
+        if ($g.Source -eq 'Imported' -or (Test-HasOrigBackup $g)) {
+            [pscustomobject]@{ Id = (Get-GameId $g); Name = $g.Name; Route = (Get-Route $g); Icon = $icon }
+        }
+    }
+}
+
+function Get-StateFingerprint {
+    $sb = New-Object Text.StringBuilder
+    foreach ($i in (Get-CustomImages | Sort-Object Id)) {
+        $h = if ($i.Icon -notmatch '^https?://' -and (Test-Path -LiteralPath $i.Icon)) { (Get-FileHash -LiteralPath $i.Icon -Algorithm MD5).Hash } else { $i.Icon }
+        [void]$sb.Append("img|$($i.Id)|$h`n")
+    }
+    [void]$sb.Append('pins|' + ((Get-PinnedIds) -join ',') + "`n")
+    foreach ($f in (Get-ChildItem $AppConfigDir -Filter *.json -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        [void]$sb.Append("cfg|$($f.Name)|$((Get-FileHash $f.FullName -Algorithm MD5).Hash)`n")
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($sb.ToString())
+    return [BitConverter]::ToString((New-Object Security.Cryptography.MD5CryptoServiceProvider).ComputeHash($bytes)).Replace('-', '')
+}
+
+function Get-Snapshots {
+    $list = foreach ($d in Get-ChildItem $SnapshotDir -Directory -ErrorAction SilentlyContinue) {
+        $meta = Join-Path $d.FullName 'snapshot.json'
+        if (-not (Test-Path $meta)) { continue }
+        try { $j = [IO.File]::ReadAllText($meta) | ConvertFrom-Json } catch { continue }
+        $j | Add-Member -NotePropertyName Path -NotePropertyValue $d.FullName -Force
+        $j
+    }
+    @($list | Sort-Object { [datetime]$_.created } -Descending)
+}
+
+# Saves a snapshot; with -IfChanged it is skipped when nothing differs from the newest one
+function New-Snapshot([string]$reason, [switch]$IfChanged) {
+    $fp = Get-StateFingerprint
+    if ($IfChanged) { $last = Get-Snapshots | Select-Object -First 1; if ($last -and $last.fingerprint -eq $fp) { return $null } }
+    $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+    $dir = Join-Path $SnapshotDir $stamp; $n = 2
+    while (Test-Path $dir) { $dir = Join-Path $SnapshotDir "$stamp-$n"; $n++ }
+    New-Item -ItemType Directory -Path (Join-Path $dir 'images') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $dir 'settings') -Force | Out-Null
+    $images = foreach ($i in Get-CustomImages) {
+        $file = $null
+        if ($i.Icon -notmatch '^https?://' -and (Test-Path -LiteralPath $i.Icon)) {
+            $file = 'images/' + $i.Id + [IO.Path]::GetExtension($i.Icon).ToLower()
+            Copy-Item -LiteralPath $i.Icon (Join-Path $dir $file.Replace('/', '\')) -Force
+        }
+        [pscustomobject]@{ id = $i.Id; name = $i.Name; route = $i.Route; file = $file; url = $(if ($i.Icon -match '^https?://') { $i.Icon } else { $null }) }
+    }
+    foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json -ErrorAction SilentlyContinue) { Copy-Item $f.FullName (Join-Path $dir 'settings') }
+    $games = foreach ($g in Get-PimaxGames) { [pscustomobject]@{ id = (Get-GameId $g); name = $g.Name; route = (Get-Route $g) } }
+    $meta = [pscustomobject]@{
+        created = (Get-Date).ToString('o'); reason = $reason; appVersion = $AppVersion; fingerprint = $fp
+        pinned = @(Get-PinnedIds); images = @($images); games = @($games)
+        settings = @(Get-ChildItem (Join-Path $dir 'settings') -Filter *.json | ForEach-Object BaseName)
+    }
+    [IO.File]::WriteAllText((Join-Path $dir 'snapshot.json'), ($meta | ConvertTo-Json -Depth 6), $Utf8NoBom)
+    # keep the newest 20 automatic snapshots; ones you make yourself are kept
+    Get-Snapshots | Where-Object { $_.reason -eq 'Automatic' } | Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.Path -Recurse -Force }
+    return $dir
+}
+
+function Save-AutoSnapshot { try { [void](New-Snapshot 'Automatic' -IfChanged) } catch { } }
+
+# Maps a snapshot's game ID to the current one (re-imported games get new IDs, so fall back to the exe path)
+function Resolve-SnapshotId($snap, [string]$oldId, $byId, $byRoute) {
+    if ($oldId -eq 'global' -or $byId.ContainsKey($oldId)) { return $oldId }
+    $old = $snap.games | Where-Object { $_.id -eq $oldId } | Select-Object -First 1
+    $route = if ($old) { [string]$old.route } else { ($snap.images | Where-Object { $_.id -eq $oldId } | Select-Object -First 1).route }
+    if ($route -and $byRoute.ContainsKey($route.ToLower())) { return $byRoute[$route.ToLower()] }
+    return $null
+}
+
+function Get-CurrentIndex {
+    $byId = @{}; $byRoute = @{}
+    foreach ($g in Get-PimaxGames) {
+        $id = Get-GameId $g; $byId[$id] = $g
+        $r = Get-Route $g; if ($r) { $byRoute[$r.ToLower()] = $id }
+    }
+    [pscustomobject]@{ ById = $byId; ByRoute = $byRoute }
+}
+
+# What in the snapshot looks lost now (things Pimax resets, not normal edits)
+function Compare-Snapshot($snap) {
+    $idx = Get-CurrentIndex
+    $lostImages = @(foreach ($i in $snap.images) {
+        $cur = Resolve-SnapshotId $snap $i.id $idx.ById $idx.ByRoute
+        if (-not $cur) { continue }
+        $icon = [string]$idx.ById[$cur].Icon
+        if (-not $icon -or ($i.file -and $icon -match '^https?://')) { $i.name }
+    })
+    $pinsNow = @(Get-PinnedIds)
+    $lostPins = ($snap.pinned.Count -gt 0 -and $pinsNow.Count -eq 0)
+    $lostSettings = @(foreach ($s in $snap.settings) {
+        $cur = Resolve-SnapshotId $snap $s $idx.ById $idx.ByRoute
+        if ($cur -and -not (Test-Path (Get-SettingsPath $cur))) { $s }
+    })
+    [pscustomobject]@{ Images = $lostImages; Pins = $lostPins; Settings = $lostSettings
+                       Any = ($lostImages.Count -gt 0 -or $lostPins -or $lostSettings.Count -gt 0) }
+}
+
+function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings) {
+    [void](New-Snapshot 'Before restore')
+    $idx = Get-CurrentIndex
+    $report = [ordered]@{ Images = 0; Order = 0; Settings = 0; Skipped = @() }
+    $svcOk = Invoke-WhilePimaxStopped {
+        if ($images) {
+            foreach ($i in $snap.images) {
+                $cur = Resolve-SnapshotId $snap $i.id $idx.ById $idx.ByRoute
+                if (-not $cur) { $report.Skipped += $i.name; continue }
+                $g = $idx.ById[$cur]
+                $icon = $null
+                if ($i.file) {
+                    $src = Join-Path $snap.Path $i.file.Replace('/', '\')
+                    if (Test-Path -LiteralPath $src) {
+                        $icon = Join-Path $CoverDir ("{0}_restored_{1}{2}" -f $cur, (Get-Date -Format 'yyyyMMddHHmmss'), [IO.Path]::GetExtension($src))
+                        Copy-Item -LiteralPath $src $icon -Force
+                    }
+                } elseif ($i.url) { $icon = $i.url }
+                if (-not $icon) { $report.Skipped += $i.name; continue }
+                $orig = Join-Path $BackupDir ([IO.Path]::GetFileName($g.File) + '.orig')
+                if (-not (Test-HasOrigBackup $g)) { Copy-Item $g.File $orig }
+                $j = [IO.File]::ReadAllText($g.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+                if ($j.PSObject.Properties.Name -contains 'icon') { $j.icon = $icon } else { $j | Add-Member -NotePropertyName icon -NotePropertyValue $icon }
+                [IO.File]::WriteAllText($g.File, ($j | ConvertTo-Json -Compress -Depth 10), $Utf8NoBom)
+                $report.Images++
+            }
+        }
+        if ($order -and (Test-Path $ClientConfig)) {
+            $ids = @(foreach ($p in $snap.pinned) { $c = Resolve-SnapshotId $snap $p $idx.ById $idx.ByRoute; if ($c) { $c } else { $p } })
+            $text = Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) $ids
+            [IO.File]::WriteAllText($ClientConfig, $text, $Utf8NoBom)
+            $report.Order = $ids.Count
+        }
+        if ($settings) {
+            if (-not (Test-Path $AppConfigDir)) { New-Item -ItemType Directory -Path $AppConfigDir | Out-Null }
+            foreach ($s in $snap.settings) {
+                $cur = Resolve-SnapshotId $snap $s $idx.ById $idx.ByRoute
+                if (-not $cur) { if ($snap.games | Where-Object { $_.id -eq $s }) { $report.Skipped += "settings for " + ($snap.games | Where-Object { $_.id -eq $s } | Select-Object -First 1).name }; continue }
+                Copy-Item (Join-Path $snap.Path "settings\$s.json") (Get-SettingsPath $cur) -Force
+                $report.Settings++
+            }
+        }
+    }
+    $report.ServiceOk = $svcOk
+    return [pscustomobject]$report
+}
+
 # ---------- Window ----------
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -353,14 +535,23 @@ function Invoke-WhilePimaxStopped([scriptblock]$action) {
     <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-    <Border x:Name="UpdateBar" Grid.Row="0" Grid.ColumnSpan="3" Visibility="Collapsed" Background="#0D2A45" BorderBrush="#1E88E5"
-            BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
-      <DockPanel>
-        <Button x:Name="UpdateClose" DockPanel.Dock="Right" Content="Later" Margin="8,0,0,0" Padding="12,4"/>
-        <Button x:Name="UpdateBtn" DockPanel.Dock="Right" Content="Download" Padding="12,4" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
-        <TextBlock x:Name="UpdateText" VerticalAlignment="Center" TextWrapping="Wrap"/>
-      </DockPanel>
-    </Border>
+    <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
+      <Border x:Name="UpdateBar" Visibility="Collapsed" Background="#0D2A45" BorderBrush="#1E88E5"
+              BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+        <DockPanel>
+          <Button x:Name="UpdateClose" DockPanel.Dock="Right" Content="Later" Margin="8,0,0,0" Padding="12,4"/>
+          <Button x:Name="UpdateBtn" DockPanel.Dock="Right" Content="Download" Padding="12,4" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
+          <TextBlock x:Name="UpdateText" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </DockPanel>
+      </Border>
+      <Border x:Name="ResetBar" Visibility="Collapsed" Background="#3A2A10" BorderBrush="#FFB74D"
+              BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+        <DockPanel>
+          <Button x:Name="ResetDismiss" DockPanel.Dock="Right" Content="Dismiss" Margin="8,0,0,0" Padding="12,4"/>
+          <Button x:Name="ResetRestore" DockPanel.Dock="Right" Content="Restore..." Padding="12,4" Background="#E65100" BorderBrush="#FFB74D" FontWeight="SemiBold"/>
+          <TextBlock x:Name="ResetText" VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </DockPanel>
+      </Border>    </StackPanel>
 
     <DockPanel Grid.Row="1" Grid.Column="0">
       <TextBlock DockPanel.Dock="Top" Text="Your Pimax library" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
@@ -369,7 +560,8 @@ function Invoke-WhilePimaxStopped([scriptblock]$action) {
         <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="8"/><RowDefinition/></Grid.RowDefinitions>
         <Button x:Name="RefreshBtn" Grid.Column="0" Content="Refresh list"/>
         <Button x:Name="OrderBtn" Grid.Column="2" Content="Library order..." Background="#1565C0" BorderBrush="#1E88E5"/>
-        <Button x:Name="SettingsBtn" Grid.Row="2" Grid.ColumnSpan="3" Content="Game settings..." Background="#1565C0" BorderBrush="#1E88E5"/>
+        <Button x:Name="SettingsBtn" Grid.Row="2" Grid.Column="0" Content="Game settings..." Background="#1565C0" BorderBrush="#1E88E5"/>
+        <Button x:Name="BackupBtn" Grid.Row="2" Grid.Column="2" Content="Backup &amp; restore..."/>
       </Grid>
       <ListBox x:Name="GameList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
     </DockPanel>
@@ -411,7 +603,7 @@ function Invoke-WhilePimaxStopped([scriptblock]$action) {
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 
 # Window icon: the exe's own icon, or PimaxGameManager.ico next to the script
@@ -489,6 +681,7 @@ function Finish-Restart([string]$doneMsg) {
     if (Restart-Pimax) { Set-Status $doneMsg }
     else { Set-Status "$doneMsg  (Couldn't restart the Pimax service - restart your PC if the image doesn't update.)" $true }
     Fill-List
+    Save-AutoSnapshot
 }
 
 $ui.ApplyBtn.Add_Click({
@@ -709,6 +902,7 @@ function Show-Order {
         $client = Get-ClientPath
         try {
             Save-PinnedOrder $ids
+            Save-AutoSnapshot
             Start-Sleep -Seconds 1
             if (Test-Path $client) { Start-Process $client }
             $script:orderResult = "Library order saved ($($ids.Count) pinned). Pimax Play restarted."
@@ -730,6 +924,7 @@ $ui.OrderBtn.Add_Click({
 
 # ---------- Game settings window ----------
 function New-DarkWindow([string]$title, [int]$w, [int]$h, [string]$body) {
+    $title = [Security.SecurityElement]::Escape($title)
     [xml]$x = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -987,6 +1182,7 @@ function Show-GameSettings([string]$startId) {
         $script:sw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         Backup-SettingsOnce $ids
         $ok = Invoke-WhilePimaxStopped { foreach ($id in $ids) { Write-GameSettings $id $script:gsPending[$id] } }
+        Save-AutoSnapshot
         $script:gsPending = [ordered]@{}
         & $script:loadTarget $script:gsTarget
         & $script:gsSay ("Saved changes to $n game(s)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
@@ -1080,6 +1276,7 @@ function Show-GameSettings([string]$startId) {
                 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
                 foreach ($f in $orphans) { Move-Item -LiteralPath $f.FullName -Destination (Join-Path $dest $f.Name) -Force }
             }
+            Save-AutoSnapshot
             & $script:gsSay "Moved $($orphans.Count) leftover file(s) to $dest."
         } catch { & $script:gsSay "Couldn't remove leftovers: $($_.Exception.Message)" $true }
     })
@@ -1107,6 +1304,115 @@ $ui.SettingsBtn.Add_Click({
     $id = if ($g) { Get-GameId $g } else { 'global' }
     try { Show-GameSettings $id } catch { Set-Status "Game settings failed: $($_.Exception.Message)" $true }
 })
+
+# ---------- Backup & restore window ----------
+function Format-SnapshotLine($s) {
+    $when = ([datetime]$s.created).ToString('MMM d, yyyy  h:mm tt')
+    $parts = @("$(@($s.images).Count) image(s)", "$(@($s.pinned).Count) pinned", "$(@($s.settings).Count) settings file(s)")
+    "{0}   -   {1}   -   {2}" -f $when, $s.reason, ($parts -join ', ')
+}
+
+function Show-Backups($preselect, $lost) {
+    $script:bw = New-DarkWindow 'Backup & restore' 760 600 @'
+  <DockPanel Margin="14">
+    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,10"
+      Text="A backup of your library images, library order and game settings is saved automatically every time you change them here, and when you open the app. If a Pimax update resets them, pick a backup and restore it."/>
+    <TextBlock x:Name="BStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#8BC34A" TextWrapping="Wrap"/>
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+      <Button x:Name="BClose" DockPanel.Dock="Right" Content="Close" Margin="8,0,0,0"/>
+      <Button x:Name="BRestore" DockPanel.Dock="Right" Content="Restore selected" Background="#E65100" BorderBrush="#FFB74D" FontWeight="SemiBold"/>
+      <StackPanel Orientation="Horizontal">
+        <Button x:Name="BNow" Content="Back up now" Background="#2E7D32" BorderBrush="#43A047"/>
+        <Button x:Name="BOpen" Content="Open backup folder" Margin="8,0,0,0"/>
+      </StackPanel>
+    </DockPanel>
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+      <TextBlock Text="Restore:" VerticalAlignment="Center" Margin="0,0,12,0"/>
+      <CheckBox x:Name="BImages" Content="Library images" IsChecked="True" Margin="0,0,16,0"/>
+      <CheckBox x:Name="BOrder" Content="Library order" IsChecked="True" Margin="0,0,16,0"/>
+      <CheckBox x:Name="BSettings" Content="Game settings" IsChecked="True"/>
+    </StackPanel>
+    <ListBox x:Name="BList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
+  </DockPanel>
+'@
+    $script:bList = $script:bw.FindName('BList'); $script:bStatus = $script:bw.FindName('BStatus')
+    $script:bSay = { param([string]$m, [bool]$bad = $false) $script:bStatus.Foreground = $(if ($bad) { '#EF5350' } else { '#8BC34A' }); $script:bStatus.Text = $m }
+    $script:bFill = {
+        param($selectPath)
+        $script:bList.Items.Clear()
+        foreach ($s in Get-Snapshots) {
+            $it = New-Object Windows.Controls.ListBoxItem
+            $it.Content = Format-SnapshotLine $s; $it.Tag = $s; $it.Padding = '6,5'
+            [void]$script:bList.Items.Add($it)
+            if ($selectPath -and $s.Path -eq $selectPath) { $script:bList.SelectedItem = $it }
+        }
+        if (-not $script:bList.SelectedItem -and $script:bList.Items.Count) { $script:bList.SelectedIndex = 0 }
+        if (-not $script:bList.Items.Count) { & $script:bSay 'No backups yet. Click Back up now to make one.' }
+    }
+    & $script:bFill $(if ($preselect) { $preselect.Path } else { $null })
+    if ($lost) {
+        $script:bw.FindName('BImages').IsChecked = ($lost.Images.Count -gt 0)
+        $script:bw.FindName('BOrder').IsChecked = [bool]$lost.Pins
+        $script:bw.FindName('BSettings').IsChecked = ($lost.Settings.Count -gt 0)
+        & $script:bSay 'The backup from before the reset is selected, with just the missing items ticked.'
+    }
+
+    $script:bw.FindName('BClose').Add_Click({ $script:bw.Close() })
+    $script:bw.FindName('BOpen').Add_Click({ Start-Process explorer.exe $SnapshotDir })
+    $script:bw.FindName('BNow').Add_Click({
+        try { $d = New-Snapshot 'Manual'; & $script:bFill $d; & $script:bSay 'Backup saved.' }
+        catch { & $script:bSay "Couldn't back up: $($_.Exception.Message)" $true }
+    })
+    $script:bw.FindName('BRestore').Add_Click({
+        $it = $script:bList.SelectedItem
+        if (-not $it) { & $script:bSay 'Pick a backup first.' $true; return }
+        $img = [bool]$script:bw.FindName('BImages').IsChecked; $ord = [bool]$script:bw.FindName('BOrder').IsChecked; $set = [bool]$script:bw.FindName('BSettings').IsChecked
+        if (-not ($img -or $ord -or $set)) { & $script:bSay 'Tick at least one thing to restore.' $true; return }
+        $what = @($(if ($img) { 'library images' }), $(if ($ord) { 'library order' }), $(if ($set) { 'game settings' })) | Where-Object { $_ }
+        $a = [Windows.MessageBox]::Show("Restore $($what -join ', ') from the backup of $(([datetime]$it.Tag.created).ToString('MMM d, h:mm tt'))?`n`nYour current state is backed up first, so you can undo this.", 'Restore backup', 'YesNo', 'Question')
+        if ($a -ne 'Yes') { return }
+        & $script:bSay 'Restoring - restarting Pimax...'
+        $script:bw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        try {
+            $r = Restore-Snapshot $it.Tag $img $ord $set
+            $msg = "Restored: $($r.Images) image(s), $($r.Order) pinned game(s) in order, $($r.Settings) settings file(s)."
+            if ($r.Skipped.Count) { $msg += " Skipped (not in your library now): $($r.Skipped -join ', ')." }
+            if (-not $r.ServiceOk) { $msg += ' Could not restart the Pimax service; restart your PC if it does not apply.' }
+            & $script:bFill $it.Tag.Path
+            & $script:bSay $msg (-not $r.ServiceOk)
+            $ui.ResetBar.Visibility = 'Collapsed'
+            Fill-List
+        } catch { & $script:bSay "Couldn't restore: $($_.Exception.Message)" $true }
+    })
+    if ($script:Capture -or $Test) { return $script:bw }
+    [void]$script:bw.ShowDialog()
+}
+
+$ui.BackupBtn.Add_Click({ try { Show-Backups $null $null } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true } })
+
+# On start: if Pimax seems to have reset things since the last backup, offer to restore; otherwise take a backup
+function Start-BackupCheck {
+    try {
+        $last = Get-Snapshots | Where-Object { $_.reason -ne 'Before restore' } | Select-Object -First 1
+        if ($last) {
+            $cmp = Compare-Snapshot $last
+            if ($cmp.Any -and (Get-AppSetting 'dismissedSnapshot') -ne $last.created) {
+                $bits = @()
+                if ($cmp.Images.Count) { $bits += "$($cmp.Images.Count) library image(s)" }
+                if ($cmp.Pins) { $bits += 'your library order' }
+                if ($cmp.Settings.Count) { $bits += "$($cmp.Settings.Count) game settings file(s)" }
+                $script:ResetSnap = $last; $script:ResetLost = $cmp
+                $ui.ResetText.Text = "Pimax seems to have reset some of your changes ($($bits -join ', ')). Restore them from your backup of $(([datetime]$last.created).ToString('MMM d, h:mm tt'))?"
+                $ui.ResetBar.Visibility = 'Visible'
+                return
+            }
+        }
+        Save-AutoSnapshot
+    } catch { }
+}
+$ui.ResetRestore.Add_Click({ try { Show-Backups $script:ResetSnap $script:ResetLost } catch { Set-Status "Backup & restore failed: $($_.Exception.Message)" $true } })
+$ui.ResetDismiss.Add_Click({ if ($script:ResetSnap) { Set-AppSetting 'dismissedSnapshot' $script:ResetSnap.created }; $ui.ResetBar.Visibility = 'Collapsed' })
+$window.Add_Loaded({ $window.Dispatcher.BeginInvoke([action]{ Start-BackupCheck }, [Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null })
 
 # ---------- Update check ----------
 function Get-UpdateInfo($release) {
@@ -1197,6 +1503,7 @@ if ($Test) {
     $AppConfigDir = Join-Path $env:TEMP ('pgm-test-' + [guid]::NewGuid().ToString('N'))
     Copy-Item $realCfg $AppConfigDir -Recurse
     $BackupDir = Join-Path $AppConfigDir '_backups'; New-Item -ItemType Directory $BackupDir | Out-Null
+    $SnapshotDir = Join-Path $AppConfigDir '_snapshots'; New-Item -ItemType Directory $SnapshotDir | Out-Null
     $script:restarts = 0
     function Invoke-WhilePimaxStopped([scriptblock]$action) { $script:restarts++; & $action; return $true }
     foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json) {
@@ -1253,6 +1560,47 @@ if ($Test) {
     "  backups: " + ((Get-ChildItem (Join-Path $BackupDir 'settings') -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')
     "  real AppConfig untouched: " + (-not (Test-Path (Join-Path $realCfg 'steam.app.620980.json')))
     Remove-Item $AppConfigDir -Recurse -Force
+    "--- Backup & restore (on temporary copies; Pimax is not touched):"
+    $keepManifest = $ManifestDir; $keepClient = $ClientConfig
+    $bt = Join-Path $env:TEMP ('pgm-bk-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory $bt | Out-Null
+    Copy-Item $ManifestDir (Join-Path $bt 'manifest') -Recurse; $ManifestDir = Join-Path $bt 'manifest'
+    Copy-Item $realCfg (Join-Path $bt 'AppConfig') -Recurse; $AppConfigDir = Join-Path $bt 'AppConfig'
+    Copy-Item $ClientConfig (Join-Path $bt 'config.json'); $ClientConfig = Join-Path $bt 'config.json'
+    if (Test-Path $LegacyBackupDir) { Copy-Item $LegacyBackupDir (Join-Path $bt 'legacy') -Recurse }; $LegacyBackupDir = Join-Path $bt 'legacy'
+    $CoverDir = Join-Path $bt 'covers'; $BackupDir = Join-Path $bt 'backups'; $SnapshotDir = Join-Path $bt 'snapshots'
+    foreach ($d in $CoverDir, $BackupDir, $SnapshotDir) { New-Item -ItemType Directory $d -Force | Out-Null }
+    # give the copy a pinned order to protect
+    [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) @('local.66be7fbb', 'local.384c724b', 'steam.app.1079800')), $Utf8NoBom)
+    $d1 = New-Snapshot 'Manual'
+    $snap = Get-Snapshots | Select-Object -First 1
+    "  backup made: " + (Format-SnapshotLine $snap)
+    "  custom images in backup: " + (($snap.images | ForEach-Object { $_.name }) -join ', ')
+    "  second automatic backup with no changes skipped: " + ($null -eq (New-Snapshot 'Automatic' -IfChanged))
+    # simulate a Pimax update wiping things
+    $cm = Join-Path $ManifestDir 'local.08db6433.json'; $j = Get-Content $cm -Raw | ConvertFrom-Json; $j.icon = ''; [IO.File]::WriteAllText($cm, ($j | ConvertTo-Json -Compress), $Utf8NoBom)
+    [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) @()), $Utf8NoBom)
+    Remove-Item (Join-Path $AppConfigDir 'steam.app.1079800.json')
+    $old = Join-Path $ManifestDir 'local.384c724b.json'; $j = Get-Content $old -Raw | ConvertFrom-Json; $j.id = 'local.deadbeef'; $j.icon = ''
+    [IO.File]::WriteAllText((Join-Path $ManifestDir 'local.deadbeef.json'), ($j | ConvertTo-Json -Compress), $Utf8NoBom); Remove-Item $old
+    "  simulated wipe: Crysis image cleared, order emptied, Pistol Whip settings deleted, Flight Sim re-imported as local.deadbeef"
+    $cmp = Compare-Snapshot $snap
+    "  detected lost -> images: $($cmp.Images -join ', '); order: $($cmp.Pins); settings: $($cmp.Settings -join ', ')"
+    $script:restarts = 0
+    $r = Restore-Snapshot $snap $true $true $true
+    "  restore report: images $($r.Images), pinned $($r.Order), settings $($r.Settings), skipped: $($r.Skipped -join ', '); Pimax restarts: $script:restarts"
+    $ci = (Get-Content $cm -Raw | ConvertFrom-Json).icon
+    "  Crysis icon now: $([IO.Path]::GetFileName($ci)) (file exists: $(Test-Path $ci))"
+    $fi = (Get-Content (Join-Path $ManifestDir 'local.deadbeef.json') -Raw | ConvertFrom-Json).icon
+    "  Flight Sim (new id) icon now: $([IO.Path]::GetFileName($fi)) (file exists: $(Test-Path $fi))"
+    "  pinned now: " + ((Get-PinnedIds) -join ', ')
+    "  Pistol Whip settings back: " + (Test-Path (Join-Path $AppConfigDir 'steam.app.1079800.json'))
+    "  after restore, anything still lost: " + (Compare-Snapshot $snap).Any
+    "  backups now: " + ((Get-Snapshots | ForEach-Object reason) -join ', ')
+    $bwin = Show-Backups $null $null
+    "  Backup window lists: $($script:bList.Items.Count) backup(s)"
+    $ManifestDir = $keepManifest; $ClientConfig = $keepClient
+    Remove-Item $bt -Recurse -Force
     "--- Library order window (not shown):"
     Show-Order | ForEach-Object { "  $_" }
     "--- Pin list write test (in memory only):"
