@@ -39,7 +39,7 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 - copies the chosen image to `%APPDATA%\Pimax\covers` so it keeps working offline and if the original moves,
 - backs up the original entry to `%APPDATA%\Pimax\cover-backups` the first time you change it,
 - writes the entry back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
-- restarts the `PiServiceLauncher` service and Pimax Play, because the service keeps entries in memory until it restarts.
+- restarts Pimax: it stops Pimax Play, the `PiServiceLauncher` service and `PiPlayService.exe` (which holds the library in memory and survives a plain service restart), then starts them again.
 
 ## Notes
 
@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.0.0
+Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.0.1
 ```
 
 ## License

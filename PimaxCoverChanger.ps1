@@ -62,9 +62,19 @@ function Restart-Pimax {
     $client = Get-ClientPath
     Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
+    # The library is held by PiPlayService.exe, which survives a plain service restart.
+    # Stop the service, stop PiPlayService, then start the service; Pimax Play starts a fresh PiPlayService.
     $svcOk = $true
-    try { Restart-Service $ServiceName -Force -ErrorAction Stop } catch { $svcOk = $false }
-    Start-Sleep -Seconds 4
+    try {
+        Stop-Service $ServiceName -Force -ErrorAction Stop
+        Get-Process PiPlayService -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        Start-Service $ServiceName -ErrorAction Stop
+    } catch {
+        $svcOk = $false
+        try { Start-Service $ServiceName -ErrorAction SilentlyContinue } catch { }
+    }
+    Start-Sleep -Seconds 3
     if (Test-Path $client) { Start-Process $client }
     return $svcOk
 }
