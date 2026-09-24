@@ -21,7 +21,7 @@ $ServiceName = 'PiServiceLauncher'
 $DefaultClient = 'C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe'
 foreach ($d in $CoverDir, $BackupDir) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.3.0'
+$AppVersion = '1.3.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -783,7 +783,7 @@ function Select-Games([string]$title, [string]$prompt, [string[]]$exclude) {
 }
 
 function Show-GameSettings([string]$startId) {
-    $script:sw = New-DarkWindow 'Game settings' 980 720 @'
+    $script:sw = New-DarkWindow 'Game settings' 1180 720 @'
   <Grid Margin="14">
     <Grid.ColumnDefinitions><ColumnDefinition Width="260"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -795,39 +795,44 @@ function Show-GameSettings([string]$startId) {
     <DockPanel Grid.Column="2">
       <TextBlock x:Name="Title" DockPanel.Dock="Top" FontSize="18" FontWeight="SemiBold"/>
       <TextBlock x:Name="Info" DockPanel.Dock="Top" Foreground="#9A9A9A" TextWrapping="Wrap" Margin="0,2,0,10"/>
-      <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
-        <Button x:Name="Save" Content="Save and restart Pimax Play" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
-        <Button x:Name="Revert" Content="Undo changes" Margin="8,0,0,0"/>
-        <Button x:Name="CopyAll" Content="Copy all settings to..." Margin="18,0,0,0" Background="#1565C0" BorderBrush="#1E88E5"/>
-      </StackPanel>
+      <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+        <Button x:Name="Save" DockPanel.Dock="Right" Content="Save all changes" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
+        <Button x:Name="DiscardAll" DockPanel.Dock="Right" Content="Discard all" Margin="0,0,8,0"/>
+        <StackPanel Orientation="Horizontal">
+          <Button x:Name="Revert" Content="Undo this game"/>
+          <Button x:Name="Reset" Content="Reset to global" Margin="8,0,0,0"/>
+          <Button x:Name="CopyAll" Content="Copy all settings to..." Margin="8,0,0,0" Background="#1565C0" BorderBrush="#1E88E5"/>
+        </StackPanel>
+      </DockPanel>
       <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid x:Name="Rows"/></ScrollViewer>
     </DockPanel>
     <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,10,0,0" Foreground="#8BC34A" TextWrapping="Wrap"
-      Text="Tick 'Custom' to give a game its own value. Unticked settings follow the global settings."/>
+      Text="Tick 'Custom' to give a game its own value. Changes are kept as you move between games; click Save all changes when you're done."/>
   </Grid>
 '@
-    $script:targets = $script:sw.FindName('Targets'); $rowsGrid = $script:sw.FindName('Rows'); $script:gsTitle = $script:sw.FindName('Title'); $script:gsInfo = $script:sw.FindName('Info'); $script:gsStatus = $script:sw.FindName('Status')
+    $script:targets = $script:sw.FindName('Targets'); $rowsGrid = $script:sw.FindName('Rows')
+    $script:gsTitle = $script:sw.FindName('Title'); $script:gsInfo = $script:sw.FindName('Info'); $script:gsStatus = $script:sw.FindName('Status')
+    $script:gsSaveBtn = $script:sw.FindName('Save'); $script:gsResetBtn = $script:sw.FindName('Reset')
+    $script:gsPending = [ordered]@{}
     $script:gsSay = { param([string]$m, [bool]$bad = $false) $script:gsStatus.Foreground = $(if ($bad) { '#EF5350' } else { '#8BC34A' }); $script:gsStatus.Text = $m }
 
     $script:gsGames = @(Get-PimaxGames | ForEach-Object { $_ | Add-Member -NotePropertyName Id -NotePropertyValue (Get-GameId $_) -PassThru -Force } | Sort-Object Name)
     $gItem = New-Object Windows.Controls.ListBoxItem
-    $gItem.Content = 'Global (default for all games)'; $gItem.Tag = 'global'; $gItem.FontWeight = 'SemiBold'; $gItem.Padding = '6,5'
+    $gItem.Tag = 'global'; $gItem.FontWeight = 'SemiBold'; $gItem.Padding = '6,5'
     [void]$script:targets.Items.Add($gItem)
     foreach ($g in $script:gsGames) {
         $it = New-Object Windows.Controls.ListBoxItem
-        $has = Test-Path -LiteralPath (Get-SettingsPath $g.Id)
-        $it.Content = $g.Name + $(if ($has) { '   *' } else { '' }); $it.Tag = $g.Id; $it.Padding = '6,5'
-        $it.ToolTip = $(if ($has) { 'Has its own settings' } else { 'Uses global settings' })
+        $it.Tag = $g.Id; $it.Padding = '6,5'
         [void]$script:targets.Items.Add($it)
     }
 
     # Build one row per setting
-    foreach ($w in 90, 200, 260, '*', 100) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $(if ($w -eq '*') { New-Object Windows.GridLength(1, 'Star') } else { New-Object Windows.GridLength($w) }); $rowsGrid.ColumnDefinitions.Add($cd) }
+    foreach ($w in 90, 190, 230, '*', 100) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $(if ($w -eq '*') { New-Object Windows.GridLength(1, 'Star') } else { New-Object Windows.GridLength($w) }); if ($w -eq '*') { $cd.MinWidth = 200 }; $rowsGrid.ColumnDefinitions.Add($cd) }
     $script:gsRows = @()
     $r = 0
     foreach ($def in $SettingDefs) {
         $rowsGrid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition))
-        $row = [pscustomobject]@{ Def = $def; Check = $null; Control = $null; Hint = $null }
+        $row = [pscustomobject]@{ Def = $def; Check = $null; Control = $null; Hint = $null; Apply = $null }
         $cb = New-Object Windows.Controls.CheckBox; $cb.Content = 'Custom'; $cb.VerticalAlignment = 'Center'; $cb.Tag = $row
         $lbl = New-Object Windows.Controls.TextBlock; $lbl.Text = $def.Label; $lbl.VerticalAlignment = 'Center'; $lbl.Margin = '0,0,10,0'
         if ($def.Tip) { $lbl.ToolTip = $def.Tip }
@@ -843,10 +848,10 @@ function Show-GameSettings([string]$startId) {
         $ctl.Tag = $row; $ctl.Margin = '0,5'; $ctl.VerticalAlignment = 'Center'
         $hint = New-Object Windows.Controls.TextBlock; $hint.Foreground = '#8A8A8A'; $hint.VerticalAlignment = 'Center'; $hint.Margin = '12,0,8,0'; $hint.TextTrimming = 'CharacterEllipsis'
         $ab = New-Object Windows.Controls.Button; $ab.Content = 'Apply to...'; $ab.Padding = '8,3'; $ab.Margin = '0,5'; $ab.Tag = $row
-        $ab.ToolTip = "Set this game's $($def.Label) on other games"
+        $ab.ToolTip = "Use this $($def.Label) on other games"
         $ab.Add_Click({ & $script:gsApplyRow $this.Tag })
         $cb.Add_Click({ $this.Tag.Control.IsEnabled = [bool]$this.IsChecked; & $script:gsChanged $this.Tag })
-        $row.Check = $cb; $row.Control = $ctl; $row.Hint = $hint
+        $row.Check = $cb; $row.Control = $ctl; $row.Hint = $hint; $row.Apply = $ab
         $col = 0
         foreach ($el in $cb, $lbl, $ctl, $hint, $ab) { [Windows.Controls.Grid]::SetRow($el, $r); [Windows.Controls.Grid]::SetColumn($el, $col); [void]$rowsGrid.Children.Add($el); $col++ }
         $script:gsRows += $row
@@ -878,10 +883,37 @@ function Show-GameSettings([string]$startId) {
         if (-not $row.Control.SelectedItem) { throw "$($row.Def.Label): pick an option." }
         return [int]$row.Control.SelectedItem.Tag
     }
+    # Settings for a target as they will be saved: queued edits if any, otherwise the file on disk
+    $script:gsSettingsOf = {
+        param([string]$id)
+        if ($script:gsPending.Contains($id)) { $src = $script:gsPending[$id] } else { $src = Read-GameSettings $id }
+        $m = [ordered]@{}; foreach ($k in $src.Keys) { $m[$k] = $src[$k] }
+        return $m
+    }
+    $script:gsNameOf = { param([string]$id) if ($id -eq 'global') { 'Global settings' } else { ($script:gsGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1).Name } }
+
+    $script:refreshMarks = {
+        foreach ($it in $script:targets.Items) {
+            $id = [string]$it.Tag
+            $unsaved = $script:gsPending.Contains($id) -or ($script:gsDirty -and $id -eq $script:gsTarget)
+            if ($id -eq 'global') { $base = 'Global (default for all games)'; $custom = $false }
+            else {
+                $base = & $script:gsNameOf $id
+                if ($script:gsPending.Contains($id)) { $custom = $script:gsPending[$id].Count -gt 0 } else { $custom = Test-Path -LiteralPath (Get-SettingsPath $id) }
+            }
+            $it.Content = $base + $(if ($custom) { '   *' } else { '' }) + $(if ($unsaved) { '   (unsaved)' } else { '' })
+            $it.Foreground = $(if ($unsaved) { '#FFB74D' } else { '#EDEDED' })
+            $it.ToolTip = $(if ($id -eq 'global') { 'Default settings for every game' } elseif ($custom) { 'Has its own settings' } else { 'Uses global settings' })
+        }
+        $n = $script:gsPending.Count
+        if ($script:gsDirty -and -not $script:gsPending.Contains($script:gsTarget)) { $n++ }
+        $script:gsSaveBtn.Content = $(if ($n) { "Save all changes ($n)" } else { 'Save all changes' })
+    }
 
     $script:gsChanged = {
         param($row)
         if ($script:gsLoading) { return }
+        $wasDirty = $script:gsDirty
         $script:gsDirty = $true
         # Picking Low/Medium/High also sets the matching render resolution, as Pimax Play does
         if ($row.Def.Key -eq 'piplay_display_quality_level' -and $row.Control.SelectedItem) {
@@ -894,20 +926,21 @@ function Show-GameSettings([string]$startId) {
                 $script:gsLoading = $false
             }
         }
+        if (-not $wasDirty) { & $script:refreshMarks }
     }
 
     $script:loadTarget = {
         param([string]$id)
         $script:gsLoading = $true
         $script:gsTarget = $id
-        $script:gsCurrent = Read-GameSettings $id
-        $glob = Read-GameSettings 'global'
+        $script:gsCurrent = & $script:gsSettingsOf $id
+        $glob = & $script:gsSettingsOf 'global'
         $isGlobal = ($id -eq 'global')
-        $name = if ($isGlobal) { 'Global settings' } else { ($script:gsGames | Where-Object { $_.Id -eq $id } | Select-Object -First 1).Name }
-        $script:gsTitle.Text = $name
-        $script:gsInfo.Text = if ($isGlobal) { 'Used by every game that has no custom value for a setting.' }
-                       elseif ($script:gsCurrent.Count) { "Has its own settings file ($id.json). Unticked settings use the global value shown on the right." }
-                       else { "Uses the global settings for everything. Tick 'Custom' on a setting to give this game its own value." }
+        $script:gsTitle.Text = & $script:gsNameOf $id
+        $pendingNote = if ($script:gsPending.Contains($id)) { ' Showing your unsaved changes.' } else { '' }
+        $script:gsInfo.Text = $(if ($isGlobal) { 'Used by every game that has no custom value for a setting.' }
+                       elseif ($script:gsCurrent.Count) { "Has its own settings ($id). Unticked settings use the global value shown on the right." }
+                       else { "Uses the global settings for everything. Tick 'Custom' on a setting to give this game its own value." }) + $pendingNote
         foreach ($row in $script:gsRows) {
             $k = $row.Def.Key
             $has = $script:gsCurrent.Contains($k)
@@ -919,8 +952,11 @@ function Show-GameSettings([string]$startId) {
             $row.Control.IsEnabled = ($has -or $isGlobal)
             $row.Hint.Text = if ($isGlobal) { $(if ($has) { '' } else { '(Pimax default)' }) } else { 'Global: ' + (& $script:display $row.Def $gv) }
         }
+        $script:gsResetBtn.Content = $(if ($isGlobal) { 'Reset to Pimax defaults' } else { 'Reset to global' })
+        $script:gsResetBtn.ToolTip = $(if ($isGlobal) { 'Clear the global settings so Pimax uses its built-in defaults' } else { 'Remove all of this game''s custom settings so it follows the global settings' })
         $script:gsDirty = $false
         $script:gsLoading = $false
+        & $script:refreshMarks
     }
 
     $script:collect = {
@@ -933,25 +969,28 @@ function Show-GameSettings([string]$startId) {
         return $map
     }
 
-    $script:refreshMarks = {
-        foreach ($it in $script:targets.Items) {
-            if ($it.Tag -eq 'global') { continue }
-            $g = $script:gsGames | Where-Object { $_.Id -eq $it.Tag } | Select-Object -First 1
-            $has = Test-Path -LiteralPath (Get-SettingsPath $it.Tag)
-            $it.Content = $g.Name + $(if ($has) { '   *' } else { '' })
-            $it.ToolTip = $(if ($has) { 'Has its own settings' } else { 'Uses global settings' })
-        }
+    # Keep the current game's edits in the queue (throws if a value is invalid)
+    $script:gsStash = {
+        if (-not $script:gsDirty) { return }
+        $map = & $script:collect
+        $script:gsPending[$script:gsTarget] = $map
+        $script:gsCurrent = $map
+        $script:gsDirty = $false
     }
 
-    $script:runWrite = {
-        param([string]$doing, [scriptblock]$work, [string[]]$ids)
-        & $script:gsSay "$doing - restarting Pimax..."
+    $script:gsSaveAll = {
+        & $script:gsStash
+        if ($script:gsPending.Count -eq 0) { & $script:gsSay 'Nothing to save.'; return $true }
+        $ids = @($script:gsPending.Keys)
+        $n = $ids.Count
+        & $script:gsSay "Saving $n game(s) - restarting Pimax..."
         $script:sw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         Backup-SettingsOnce $ids
-        $ok = Invoke-WhilePimaxStopped $work
-        & $script:refreshMarks
+        $ok = Invoke-WhilePimaxStopped { foreach ($id in $ids) { Write-GameSettings $id $script:gsPending[$id] } }
+        $script:gsPending = [ordered]@{}
         & $script:loadTarget $script:gsTarget
-        return $ok
+        & $script:gsSay ("Saved changes to $n game(s)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
+        return $true
     }
 
     $script:gsApplyRow = {
@@ -962,57 +1001,72 @@ function Show-GameSettings([string]$startId) {
             $val = if ($custom) { & $script:getValue $row } else { $null }
         } catch { & $script:gsSay $_.Exception.Message $true; return }
         $what = if ($custom) { "$label = " + (& $script:display $row.Def $val) } else { "$label back to the global value" }
-        $ids = Select-Games "Apply $label" "Set $what on these games:" @($script:gsTarget)
+        $ids = Select-Games "Apply $label" "Set $what on these games (saved when you click Save all changes):" @($script:gsTarget)
         if (-not $ids -or $ids.Count -eq 0) { return }
         $key = $row.Def.Key
-        try {
-            $ok = & $script:runWrite "Applying $label" {
-                foreach ($t in $ids) {
-                    $m = Read-GameSettings $t
-                    if ($custom) { $m[$key] = $val } elseif ($m.Contains($key)) { $m.Remove($key) }
-                    if ($custom -and $key -eq 'piplay_display_quality_level' -and $QualityRates.ContainsKey([int]$val)) { $m['runtime_pixels_per_display_pixel_rate'] = $QualityRates[[int]$val] }
-                    Write-GameSettings $t $m
-                }
-            } $ids
-            & $script:gsSay ("Set $what on $($ids.Count) game(s)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
-        } catch { & $script:gsSay "Couldn't apply: $($_.Exception.Message)" $true }
+        foreach ($t in $ids) {
+            $m = & $script:gsSettingsOf $t
+            if ($custom) { $m[$key] = $val } elseif ($m.Contains($key)) { $m.Remove($key) }
+            if ($custom -and $key -eq 'piplay_display_quality_level' -and $QualityRates.ContainsKey([int]$val)) { $m['runtime_pixels_per_display_pixel_rate'] = $QualityRates[[int]$val] }
+            $script:gsPending[$t] = $m
+        }
+        & $script:refreshMarks
+        & $script:gsSay "Queued $what for $($ids.Count) game(s). Click Save all changes to apply."
     }
 
     $script:targets.Add_SelectionChanged({
         $it = $script:targets.SelectedItem
-        if (-not $it -or $it.Tag -eq $script:gsTarget) { return }
-        if ($script:gsDirty) {
-            $a = [Windows.MessageBox]::Show('You have unsaved changes. Discard them?', 'Game settings', 'YesNo', 'Question')
-            if ($a -ne 'Yes') { $script:gsLoading = $true; $script:targets.SelectedItem = ($script:targets.Items | Where-Object { $_.Tag -eq $script:gsTarget } | Select-Object -First 1); $script:gsLoading = $false; return }
+        if ($script:gsSwitching -or -not $it -or $it.Tag -eq $script:gsTarget) { return }
+        try { & $script:gsStash }
+        catch {
+            [Windows.MessageBox]::Show("Fix this before switching games:`n`n$($_.Exception.Message)", 'Game settings', 'OK', 'Warning') | Out-Null
+            $script:gsSwitching = $true
+            $script:targets.SelectedItem = ($script:targets.Items | Where-Object { $_.Tag -eq $script:gsTarget } | Select-Object -First 1)
+            $script:gsSwitching = $false
+            return
         }
         & $script:loadTarget ([string]$it.Tag)
         & $script:gsSay "Showing $($script:gsTitle.Text)."
     })
 
-    $script:sw.FindName('Revert').Add_Click({ & $script:loadTarget $script:gsTarget; & $script:gsSay 'Changes undone.' })
+    $script:sw.FindName('Revert').Add_Click({
+        if ($script:gsPending.Contains($script:gsTarget)) { $script:gsPending.Remove($script:gsTarget) }
+        & $script:loadTarget $script:gsTarget
+        & $script:gsSay "Undid unsaved changes to $($script:gsTitle.Text)."
+    })
 
-    $script:sw.FindName('Save').Add_Click({
-        $id = $script:gsTarget
-        try { $map = & $script:collect } catch { & $script:gsSay $_.Exception.Message $true; return }
-        try {
-            $ok = & $script:runWrite 'Saving' { Write-GameSettings $id $map } @($id)
-            & $script:gsSay ("Saved settings for $($script:gsTitle.Text)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
-        } catch { & $script:gsSay "Couldn't save: $($_.Exception.Message)" $true }
+    $script:gsResetBtn.Add_Click({
+        $script:gsPending[$script:gsTarget] = [ordered]@{}
+        & $script:loadTarget $script:gsTarget
+        $what = if ($script:gsTarget -eq 'global') { 'Global reset to Pimax defaults' } else { "$($script:gsTitle.Text) reset to the global settings" }
+        & $script:gsSay "$what. Click Save all changes to apply, or Undo this game to cancel."
+    })
+
+    $script:sw.FindName('DiscardAll').Add_Click({
+        if (-not $script:gsPending.Count -and -not $script:gsDirty) { & $script:gsSay 'No unsaved changes.'; return }
+        $a = [Windows.MessageBox]::Show('Discard all unsaved changes?', 'Game settings', 'YesNo', 'Question')
+        if ($a -ne 'Yes') { return }
+        $script:gsPending = [ordered]@{}
+        & $script:loadTarget $script:gsTarget
+        & $script:gsSay 'All unsaved changes discarded.'
+    })
+
+    $script:gsSaveBtn.Add_Click({
+        try { [void](& $script:gsSaveAll) } catch { & $script:gsSay "Couldn't save: $($_.Exception.Message)" $true }
     })
 
     $script:sw.FindName('CopyAll').Add_Click({
         try { $map = & $script:collect } catch { & $script:gsSay $_.Exception.Message $true; return }
         $src = $script:gsTitle.Text
-        $ids = Select-Games 'Copy all settings' "Copy every setting shown for $src to these games. Their current per-game settings will be replaced." @($script:gsTarget)
+        $ids = Select-Games 'Copy all settings' "Copy every setting shown for $src to these games. Their per-game settings will be replaced when you click Save all changes." @($script:gsTarget)
         if (-not $ids -or $ids.Count -eq 0) { return }
-        $copy = [ordered]@{}; foreach ($k in $map.Keys) { $copy[$k] = $map[$k] }
-        try {
-            $ok = & $script:runWrite "Copying settings from $src" { foreach ($t in $ids) { Write-GameSettings $t $copy } } $ids
-            & $script:gsSay ("Copied settings from $src to $($ids.Count) game(s)." + $(if (-not $ok) { ' (Could not restart the Pimax service; restart your PC if it does not apply.)' } else { '' })) (-not $ok)
-        } catch { & $script:gsSay "Couldn't copy: $($_.Exception.Message)" $true }
+        foreach ($t in $ids) { $copy = [ordered]@{}; foreach ($k in $map.Keys) { $copy[$k] = $map[$k] }; $script:gsPending[$t] = $copy }
+        & $script:refreshMarks
+        & $script:gsSay "Queued a copy of $src's settings for $($ids.Count) game(s). Click Save all changes to apply."
     })
 
     $script:sw.FindName('Leftovers').Add_Click({
+        if ($script:gsPending.Count -or $script:gsDirty) { & $script:gsSay 'Save or discard your changes first, then remove leftovers.' $true; return }
         $known = @('global') + @($script:gsGames | ForEach-Object { $_.Id })
         $orphans = @(Get-ChildItem $AppConfigDir -Filter *.json -ErrorAction SilentlyContinue | Where-Object { $known -notcontains $_.BaseName })
         if ($orphans.Count -eq 0) { & $script:gsSay 'No leftover settings files - every file belongs to a game in your library.'; return }
@@ -1021,26 +1075,30 @@ function Show-GameSettings([string]$startId) {
         if ($a -ne 'Yes') { return }
         $dest = Join-Path $BackupDir 'settings\leftover'
         try {
-            $ok = & $script:runWrite 'Removing leftover settings' {
+            & $script:gsSay 'Removing leftover settings - restarting Pimax...'
+            $ok = Invoke-WhilePimaxStopped {
                 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
                 foreach ($f in $orphans) { Move-Item -LiteralPath $f.FullName -Destination (Join-Path $dest $f.Name) -Force }
-            } @()
+            }
             & $script:gsSay "Moved $($orphans.Count) leftover file(s) to $dest."
         } catch { & $script:gsSay "Couldn't remove leftovers: $($_.Exception.Message)" $true }
     })
 
     $script:sw.Add_Closing({
-        if ($script:gsDirty) {
-            $a = [Windows.MessageBox]::Show('You have unsaved changes. Close anyway?', 'Game settings', 'YesNo', 'Question')
-            if ($a -ne 'Yes') { $_.Cancel = $true }
+        try { & $script:gsStash } catch { }
+        if ($script:gsPending.Count -eq 0 -and -not $script:gsDirty) { return }
+        $a = [Windows.MessageBox]::Show("Save your changes to $($script:gsPending.Count) game(s) before closing?", 'Game settings', 'YesNoCancel', 'Question')
+        if ($a -eq 'Cancel') { $_.Cancel = $true; return }
+        if ($a -eq 'Yes') {
+            try { [void](& $script:gsSaveAll) } catch { & $script:gsSay "Couldn't save: $($_.Exception.Message)" $true; $_.Cancel = $true }
         }
     })
 
     $start = $script:targets.Items | Where-Object { $_.Tag -eq $startId } | Select-Object -First 1
     if (-not $start) { $start = $script:targets.Items[0] }
-    $script:gsTarget = $null
+    $script:gsTarget = $null; $script:gsDirty = $false; $script:gsSwitching = $false
     $script:targets.SelectedItem = $start
-    if ($Test) { return $script:sw }
+    if ($script:Capture -or $Test) { return $script:sw }
     [void]$script:sw.ShowDialog()
 }
 
@@ -1139,7 +1197,8 @@ if ($Test) {
     $AppConfigDir = Join-Path $env:TEMP ('pgm-test-' + [guid]::NewGuid().ToString('N'))
     Copy-Item $realCfg $AppConfigDir -Recurse
     $BackupDir = Join-Path $AppConfigDir '_backups'; New-Item -ItemType Directory $BackupDir | Out-Null
-    function Invoke-WhilePimaxStopped([scriptblock]$action) { & $action; return $true }
+    $script:restarts = 0
+    function Invoke-WhilePimaxStopped([scriptblock]$action) { $script:restarts++; & $action; return $true }
     foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json) {
         $before = [IO.File]::ReadAllText($f.FullName) -replace "`r`n", "`n"
         Write-GameSettings $f.BaseName (Read-GameSettings $f.BaseName)
@@ -1147,27 +1206,51 @@ if ($Test) {
         "  round-trip $($f.Name): " + $(if ($before.TrimEnd() -eq $after.TrimEnd()) { 'identical' } else { "DIFFERENT`n$before`n---`n$after" })
     }
     $sw = Show-GameSettings 'local.08db6433'
-    "  opened for: $($sw.FindName('Title').Text)"
-    foreach ($row in $script:gsRows) {
-        $v = if ($row.Def.Kind -eq 'number') { $row.Control.Text } else { $row.Control.SelectedItem.Content }
-        "    [{0}] {1,-26} {2,-34} {3}" -f $(if ($row.Check.IsChecked) { 'x' } else { ' ' }), $row.Def.Label, $v, $row.Hint.Text
-    }
     $click = { param($b) $b.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
     $rowOf = { param($k) $script:gsRows | Where-Object { $_.Def.Key -eq $k } }
-    # edit: quality -> High (should also set render 1.0), center rendering custom -> Quality
-    $q = & $rowOf 'piplay_display_quality_level'; $q.Control.SelectedItem = ($q.Control.Items | Where-Object { $_.Tag -eq 2 })
-    $c = & $rowOf 'runtime_foveated_rendering_level'; $c.Check.IsChecked = $true; $c.Control.IsEnabled = $true; $c.Control.SelectedItem = ($c.Control.Items | Where-Object { $_.Tag -eq 2 })
-    & $click $sw.FindName('Save')
-    "  after Save, CrysisVR file:"; (Get-Content (Get-SettingsPath 'local.08db6433') -Raw).TrimEnd() -split "`n" | ForEach-Object { "      $_" }
-    "  status: " + $sw.FindName('Status').Text
-    function Select-Games { return @('steam.app.1079800') }
-    & $click ($script:gsRows | Where-Object { $_.Def.Key -eq 'runtime_dbg_asw_enable' }).Control.Parent.Children[(4 + 5 * 9)]
-    "  after Apply Smart Smoothing to Pistol Whip:"; (Get-Content (Get-SettingsPath 'steam.app.1079800') -Raw).TrimEnd() -split "`n" | ForEach-Object { "      $_" }
-    function Select-Games { return @('steam.app.242760', 'steam.app.620980') }
+    $pick = { param($row, $val) $row.Control.SelectedItem = ($row.Control.Items | Where-Object { $_.Tag -eq $val }) }
+    $goTo = { param($id) $script:targets.SelectedItem = ($script:targets.Items | Where-Object { $_.Tag -eq $id }) }
+    $fileOf = { param($id) $p = Get-SettingsPath $id; if (Test-Path $p) { ((Get-Content $p -Raw).Trim() -replace '\s+', ' ') } else { '(no file)' } }
+    "  opened: $($script:gsTitle.Text)"
+    # 1. Crysis: quality High (auto render 1.0) + center rendering Quality
+    & $pick (& $rowOf 'piplay_display_quality_level') 2
+    $c = & $rowOf 'runtime_foveated_rendering_level'; $c.Check.IsChecked = $true; $c.Control.IsEnabled = $true; & $pick $c 2
+    # 2. switch to Pistol Whip, turn on Smart Smoothing custom
+    & $goTo 'steam.app.1079800'
+    "  switched to: $($script:gsTitle.Text); save button: $($script:gsSaveBtn.Content)"
+    $a = & $rowOf 'runtime_dbg_asw_enable'; $a.Check.IsChecked = $true; $a.Control.IsEnabled = $true; & $pick $a 1
+    # 3. apply Pistol Whip's Smart Smoothing to Beat Saber, copy all to The Forest
+    function Select-Games { return @('steam.app.620980') }
+    & $click $a.Apply
+    function Select-Games { return @('steam.app.242760') }
     & $click $sw.FindName('CopyAll')
-    "  after Copy all to The Forest + Beat Saber: forest identical to Crysis = " + ((Get-Content (Get-SettingsPath 'steam.app.242760') -Raw) -eq (Get-Content (Get-SettingsPath 'local.08db6433') -Raw)) + "; beat saber file exists = " + (Test-Path (Get-SettingsPath 'steam.app.620980'))
-    "  status: " + $sw.FindName('Status').Text
-    "  backups made: " + ((Get-ChildItem (Join-Path $BackupDir 'settings') -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')
+    "  queued: $($script:gsSaveBtn.Content); restarts so far: $script:restarts; files unchanged so far: " + ((& $fileOf 'steam.app.620980') -eq '(no file)')
+    # 4. back to Crysis: edits kept?
+    & $goTo 'local.08db6433'
+    "  back on Crysis - quality: $((& $rowOf 'piplay_display_quality_level').Control.SelectedItem.Content), render: $((& $rowOf 'runtime_pixels_per_display_pixel_rate').Control.Text), center: $((& $rowOf 'runtime_foveated_rendering_level').Control.SelectedItem.Content)"
+    "  list marks: " + (($script:targets.Items | Where-Object { $_.Content -match 'unsaved' } | ForEach-Object { $_.Content.Trim() }) -join ' | ')
+    # 5. save all at once
+    & $click $script:gsSaveBtn
+    "  status: " + $script:gsStatus.Text + "   restarts: $script:restarts"
+    "  CrysisVR:    " + (& $fileOf 'local.08db6433')
+    "  Pistol Whip: " + (& $fileOf 'steam.app.1079800')
+    "  Beat Saber:  " + (& $fileOf 'steam.app.620980')
+    "  The Forest:  " + (& $fileOf 'steam.app.242760')
+    "  save button after: $($script:gsSaveBtn.Content); unsaved marks left: " + @($script:targets.Items | Where-Object { $_.Content -match 'unsaved' }).Count
+    # 6. undo + invalid value handling
+    $rr = & $rowOf 'runtime_pixels_per_display_pixel_rate'; $rr.Control.Text = '5'
+    & $click $script:gsSaveBtn
+    "  invalid value: " + $script:gsStatus.Text
+    & $click $sw.FindName('Revert')
+    "  after undo, render: $($rr.Control.Text); dirty: $script:gsDirty"
+    # 7. reset a game to global
+    & $click $script:gsResetBtn
+    "  reset button: $($script:gsResetBtn.Content); custom rows ticked now: " + @($script:gsRows | Where-Object { $_.Check.IsChecked }).Count + "; status: $($script:gsStatus.Text)"
+    & $click $script:gsSaveBtn
+    "  after save, CrysisVR file: " + (& $fileOf 'local.08db6433') + "; restarts: $script:restarts"
+    & $goTo 'global'
+    "  on Global the button reads: $($script:gsResetBtn.Content)"
+    "  backups: " + ((Get-ChildItem (Join-Path $BackupDir 'settings') -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ')
     "  real AppConfig untouched: " + (-not (Test-Path (Join-Path $realCfg 'steam.app.620980.json')))
     Remove-Item $AppConfigDir -Recurse -Force
     "--- Library order window (not shown):"
