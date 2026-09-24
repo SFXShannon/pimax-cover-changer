@@ -83,6 +83,7 @@ What's backed up:
 - **Automatic backups:** every time you apply an image, save the library order or save game settings, and each time you open the app, a backup is saved (only when something changed). The newest 20 automatic backups are kept; ones you make with **Back up now** are kept until you delete them.
 - **Reset detection:** when the app opens it compares Pimax with your latest backup. If images, the order, settings files or headset files (such as the eye-tracking calibration) have gone missing, an orange bar offers to **Restore** them.
 - **Restore:** in **Backup & restore...**, pick a backup and choose what to restore: library images, library order, game settings, headset settings, or any mix. Restoring headset settings briefly restarts the Pimax headset software (take the headset off first); it comes back on its own. Your current state is backed up first, so a restore can be undone. Games that were removed and imported again get a new ID in Pimax; they are matched by their .exe path.
+- **Delete:** select one or more backups (Ctrl-click or Shift-click for several) and click **Delete selected**.
 
 Backups are stored in %APPDATA%\PimaxGameManager\snapshots, outside Pimax's folders. Each one is a folder with the images, the settings files and a snapshot.json describing the library order and which image goes with which game.
 
@@ -116,7 +117,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.1
 ```
 
 ## License

@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.5.0'
+$AppVersion = '1.5.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -467,6 +467,19 @@ function New-Snapshot([string]$reason, [switch]$IfChanged) {
     # keep the newest 20 automatic snapshots; ones you make yourself are kept
     Get-Snapshots | Where-Object { $_.reason -eq 'Automatic' } | Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.Path -Recurse -Force }
     return $dir
+}
+
+# Deletes backup folders - only ever ones inside the app's own snapshots folder
+function Remove-Snapshots([string[]]$paths) {
+    $root = [IO.Path]::GetFullPath($SnapshotDir).TrimEnd('\') + '\'
+    $n = 0
+    foreach ($p in $paths) {
+        $full = [IO.Path]::GetFullPath($p)
+        if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path (Join-Path $full 'snapshot.json'))) { throw "Not a backup folder: $p" }
+        Remove-Item -LiteralPath $full -Recurse -Force
+        $n++
+    }
+    return $n
 }
 
 function Save-AutoSnapshot { try { [void](New-Snapshot 'Automatic' -IfChanged) } catch { } }
@@ -1469,6 +1482,7 @@ function Show-Backups($preselect, $lost) {
       <StackPanel Orientation="Horizontal">
         <Button x:Name="BNow" Content="Back up now" Background="#2E7D32" BorderBrush="#43A047"/>
         <Button x:Name="BOpen" Content="Open backup folder" Margin="8,0,0,0"/>
+        <Button x:Name="BDelete" Content="Delete selected" Margin="8,0,0,0" Background="#5D1F1F" BorderBrush="#C62828"/>
       </StackPanel>
     </DockPanel>
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
@@ -1478,7 +1492,7 @@ function Show-Backups($preselect, $lost) {
       <CheckBox x:Name="BSettings" Content="Game settings" IsChecked="True" Margin="0,0,16,0"/>
       <CheckBox x:Name="BHeadset" Content="Headset (eye tracking, IPD, play area)" IsChecked="True"/>
     </StackPanel>
-    <ListBox x:Name="BList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
+    <ListBox x:Name="BList" SelectionMode="Extended" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" ToolTip="Ctrl-click or Shift-click to select several backups"/>
   </DockPanel>
 '@
     $script:bList = $script:bw.FindName('BList'); $script:bStatus = $script:bw.FindName('BStatus')
@@ -1506,6 +1520,15 @@ function Show-Backups($preselect, $lost) {
 
     $script:bw.FindName('BClose').Add_Click({ $script:bw.Close() })
     $script:bw.FindName('BOpen').Add_Click({ Start-Process explorer.exe $SnapshotDir })
+    $script:bw.FindName('BDelete').Add_Click({
+        $sel = @($script:bList.SelectedItems | ForEach-Object { $_.Tag })
+        if (-not $sel.Count) { & $script:bSay 'Pick the backup(s) to delete first.' $true; return }
+        $what = if ($sel.Count -eq 1) { 'the backup from ' + ([datetime]$sel[0].created).ToString('MMM d, h:mm tt') } else { "$($sel.Count) backups" }
+        $a = [Windows.MessageBox]::Show("Delete $what?`n`nThis can't be undone.", 'Delete backup', 'YesNo', 'Warning')
+        if ($a -ne 'Yes') { return }
+        try { $n = Remove-Snapshots @($sel | ForEach-Object { $_.Path }); & $script:bFill $null; & $script:bSay "Deleted $n backup(s)." }
+        catch { & $script:bSay "Couldn't delete: $($_.Exception.Message)" $true }
+    })
     $script:bw.FindName('BNow').Add_Click({
         try { $d = New-Snapshot 'Manual'; & $script:bFill $d; & $script:bSay 'Backup saved.' }
         catch { & $script:bSay "Couldn't back up: $($_.Exception.Message)" $true }
@@ -1513,6 +1536,7 @@ function Show-Backups($preselect, $lost) {
     $script:bw.FindName('BRestore').Add_Click({
         $it = $script:bList.SelectedItem
         if (-not $it) { & $script:bSay 'Pick a backup first.' $true; return }
+        if ($script:bList.SelectedItems.Count -gt 1) { & $script:bSay 'Pick just one backup to restore.' $true; return }
         $img = [bool]$script:bw.FindName('BImages').IsChecked; $ord = [bool]$script:bw.FindName('BOrder').IsChecked; $set = [bool]$script:bw.FindName('BSettings').IsChecked; $hs = [bool]$script:bw.FindName('BHeadset').IsChecked
         if (-not ($img -or $ord -or $set -or $hs)) { & $script:bSay 'Tick at least one thing to restore.' $true; return }
         $what = @($(if ($img) { 'library images' }), $(if ($ord) { 'library order' }), $(if ($set) { 'game settings' }), $(if ($hs) { 'headset settings' })) | Where-Object { $_ }
@@ -1759,6 +1783,11 @@ if ($Test) {
     "  backups now: " + ((Get-Snapshots | ForEach-Object reason) -join ', ')
     $bwin = Show-Backups $null $null
     "  Backup window lists: $($script:bList.Items.Count) backup(s)"
+    $script:bList.SelectAll(); $script:bw.FindName('BRestore').RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    "  restore with 2 selected says: $($script:bStatus.Text)"
+    $manual = Get-Snapshots | Where-Object { $_.reason -eq 'Manual' } | Select-Object -First 1
+    "  deleted: " + (Remove-Snapshots @($manual.Path)) + "; backups left: " + ((Get-Snapshots | ForEach-Object reason) -join ', ')
+    try { Remove-Snapshots @($AppConfigDir) | Out-Null; "  SAFETY FAILED: deleted a non-backup folder" } catch { "  refuses non-backup folder: " + $_.Exception.Message.Substring(0, 22) + " ... (still exists: $(Test-Path $AppConfigDir))" }
     $ManifestDir = $keepManifest; $ClientConfig = $keepClient
     Remove-Item $bt -Recurse -Force
     "--- Library order window (not shown):"
