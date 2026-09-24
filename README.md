@@ -1,5 +1,7 @@
 # Pimax Game Manager
 
+[![Downloads](https://img.shields.io/github/downloads/SFXShannon/pimax-game-manager/total?label=downloads)](https://github.com/SFXShannon/pimax-game-manager/releases) [![Latest release](https://img.shields.io/github/v/release/SFXShannon/pimax-game-manager?label=latest)](https://github.com/SFXShannon/pimax-game-manager/releases/latest) [![License: MIT](https://img.shields.io/github/license/SFXShannon/pimax-game-manager)](LICENSE)
+
 A Windows tool for managing your **Pimax Play** library: set custom cover images (including for games added with **Import**), arrange the library in any order, edit per-game settings for many games at once, and back it all up so a Pimax update can't wipe your changes.
 
 *Formerly Pimax Cover Changer.*
