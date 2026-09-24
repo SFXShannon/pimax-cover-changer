@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.4.0'
+$AppVersion = '1.4.1'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -97,6 +97,7 @@ function Restart-Pimax {
 }
 
 function Save-Cover($game, [string]$source) {
+    if ($game.Source -ne 'Imported') { throw "Pimax replaces images for $($game.Source) games every time it starts, so only imported games can have a custom image." }
     $id = [IO.Path]::GetFileNameWithoutExtension($game.File)
     $ext = [IO.Path]::GetExtension(($source -split '\?')[0]).ToLower()
     if ($ext -notin '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif') { $ext = '.jpg' }
@@ -367,12 +368,12 @@ function Test-HasOrigBackup($game) {
     return (Test-Path (Join-Path $BackupDir $n)) -or (Test-Path (Join-Path $LegacyBackupDir $n))
 }
 
-# Games whose tile image was customised: any image on an imported game, or any image this app replaced
+# Games whose tile image can be customised and kept: imported games (Pimax rebuilds Steam and Oculus entries itself)
 function Get-CustomImages {
     foreach ($g in Get-PimaxGames) {
         $icon = [string]$g.Icon
         if (-not $icon) { continue }
-        if ($g.Source -eq 'Imported' -or (Test-HasOrigBackup $g)) {
+        if ($g.Source -eq 'Imported') {
             [pscustomobject]@{ Id = (Get-GameId $g); Name = $g.Name; Route = (Get-Route $g); Icon = $icon }
         }
     }
@@ -653,11 +654,14 @@ $ui.GameList.Add_SelectionChanged({
     $g = Selected-Game
     if (-not $g) { return }
     $ui.GameTitle.Text = $g.Name
+    $canChange = ($g.Source -eq 'Imported')
     $info = "Source: $($g.Source)"
-    if ($g.Source -ne 'Imported') { $info += "   -  Pimax may reset art for store games when it rescans your library." }
+    if (-not $canChange) { $info += "   -  Pimax takes this game's image from $(if ($g.Source -eq 'Oculus') { 'Oculus' } else { 'Steam' }) every time it starts, so it can't be changed here. To use your own image, add the game with Import in Pimax Play." }
     $ui.GameInfo.Text = $info
     $ui.SourceBox.Text = ''
-    try { Show-Preview $g.Icon; Set-Status 'Showing the current image.' } catch { Set-Status 'Current image could not be loaded.' $true }
+    foreach ($b in $ui.ApplyBtn, $ui.FindBtn, $ui.BrowseBtn, $ui.PreviewBtn, $ui.SourceBox) { $b.IsEnabled = $canChange }
+    $ui.RestoreBtn.IsEnabled = $canChange
+    try { Show-Preview $g.Icon; Set-Status $(if ($canChange) { 'Showing the current image.' } else { 'Images can only be changed for imported games.' }) } catch { Set-Status 'Current image could not be loaded.' $true }
 })
 
 $ui.BrowseBtn.Add_Click({

@@ -14,7 +14,9 @@ Windows SmartScreen or Defender may warn about it as an unrecognized app. If you
 
 ## Library images
 
-1. Pick a game from your Pimax library on the left.
+Custom images work for games added to Pimax Play with **Import**. For SteamVR and Oculus games, Pimax copies the image from Steam or Oculus every time it starts, so any change is overwritten within seconds; the app shows the current image but won't let you change it. To give a Steam or Oculus game your own image, add it with **Import** in Pimax Play.
+
+1. Pick an imported game from your Pimax library on the left.
 2. Click **Find image** to search for art automatically, or paste an image link, or click **Browse...** for an image file.
 3. Click **Apply image**. The tool saves the image, updates the game's entry, and restarts Pimax Play.
 
@@ -92,7 +94,7 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 
 ## Notes
 
-- Custom images on Steam games may be reset when Pimax rescans your library. Imported games keep theirs.
+- Custom images only work for imported games; Pimax rebuilds Steam and Oculus entries from those stores every time it starts.
 - Tested with Pimax Play 2.x. A future Pimax update could change how this works.
 
 ## Run from the script
@@ -105,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.0
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.1
 ```
 
 ## License
