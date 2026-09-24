@@ -36,6 +36,8 @@ If the automatic match is wrong, type a different name in the search box and cli
 
 Pimax Play normally lists Steam games by Steam app ID, then Oculus games, then imported games in the order you added them. The only order it lets you set is for **pinned** games, which always come first. **Library order...** uses that to let you arrange the whole library:
 
+![Library order](screenshots/library-order.png)
+
 - Tick games to pin them, and drag them (or use **Move up / Move down**) into the order you want.
 - **Pin all** then drag to control the entire list. **Sort A-Z** sorts alphabetically.
 - **Save and restart Pimax Play** writes the order and reopens Pimax Play.
