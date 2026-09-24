@@ -21,6 +21,8 @@ $ServiceName = 'PiServiceLauncher'
 $DefaultClient = 'C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe'
 foreach ($d in $CoverDir, $BackupDir) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
+$AppVersion = '1.2.0'
+$RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-cover-changer/releases/latest'
 
 # ---------- Library ----------
 function Get-PimaxGames {
@@ -253,9 +255,18 @@ function Set-PinnedIdsInText([string]$text, [string[]]$ids) {
   </Window.Resources>
   <Grid Margin="16">
     <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-    <DockPanel Grid.Column="0">
+    <Border x:Name="UpdateBar" Grid.Row="0" Grid.ColumnSpan="3" Visibility="Collapsed" Background="#0D2A45" BorderBrush="#1E88E5"
+            BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
+      <DockPanel>
+        <Button x:Name="UpdateClose" DockPanel.Dock="Right" Content="Later" Margin="8,0,0,0" Padding="12,4"/>
+        <Button x:Name="UpdateBtn" DockPanel.Dock="Right" Content="Download" Padding="12,4" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
+        <TextBlock x:Name="UpdateText" VerticalAlignment="Center" TextWrapping="Wrap"/>
+      </DockPanel>
+    </Border>
+
+    <DockPanel Grid.Row="1" Grid.Column="0">
       <TextBlock DockPanel.Dock="Top" Text="Your Pimax library" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
       <Grid DockPanel.Dock="Bottom" Margin="0,8,0,0">
         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
@@ -265,7 +276,7 @@ function Set-PinnedIdsInText([string]$text, [string[]]$ids) {
       <ListBox x:Name="GameList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
     </DockPanel>
 
-    <DockPanel Grid.Column="2">
+    <DockPanel Grid.Row="1" Grid.Column="2">
       <TextBlock x:Name="GameTitle" DockPanel.Dock="Top" Text="Pick a game on the left" FontSize="18" FontWeight="SemiBold"/>
       <TextBlock x:Name="GameInfo" DockPanel.Dock="Top" Foreground="#9A9A9A" Margin="0,2,0,10" TextWrapping="Wrap"/>
       <StackPanel DockPanel.Dock="Bottom">
@@ -291,14 +302,15 @@ function Set-PinnedIdsInText([string]$text, [string[]]$ids) {
       </Border>
     </DockPanel>
 
-    <TextBlock x:Name="Status" Grid.Row="1" Grid.ColumnSpan="3" Margin="0,12,0,0" Foreground="#8BC34A" TextWrapping="Wrap"
+    <TextBlock x:Name="Status" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0" Foreground="#8BC34A" TextWrapping="Wrap"
                Text="Wide banner images (about 460x215 or 920x430) fit Pimax tiles best."/>
   </Grid>
 </Window>
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose') { $ui[$n] = $window.FindName($n) }
+$window.Title = "Pimax Cover Changer $AppVersion"
 
 # Window icon: the exe's own icon, or PimaxCoverChanger.ico next to the script
 $script:AppIcon = $null
@@ -614,6 +626,48 @@ $ui.OrderBtn.Add_Click({
     if ($script:orderResult) { Set-Status $script:orderResult }
 })
 
+# ---------- Update check ----------
+function Get-UpdateInfo($release) {
+    $tag = [string]$release.tag_name
+    try { $latest = [version]($tag.TrimStart('v', 'V')) } catch { return $null }
+    if ($latest -le [version]$AppVersion) { return $null }
+    [pscustomobject]@{ Version = $latest.ToString(); Url = [string]$release.html_url }
+}
+
+function Show-UpdateNotice($release) {
+    $info = Get-UpdateInfo $release
+    if (-not $info) { return }
+    $script:UpdateUrl = $info.Url
+    $ui.UpdateText.Text = "Version $($info.Version) of Pimax Cover Changer is available (you have $AppVersion)."
+    $ui.UpdateBar.Visibility = 'Visible'
+}
+
+$ui.UpdateBtn.Add_Click({ if ($script:UpdateUrl) { Start-Process $script:UpdateUrl } })
+$ui.UpdateClose.Add_Click({ $ui.UpdateBar.Visibility = 'Collapsed' })
+
+# Download in the background; a timer on the UI thread picks up the result (offline = silently skipped)
+$window.Add_Loaded({
+    try {
+        $wc = New-Object Net.WebClient
+        $wc.Headers.Add('User-Agent', 'pimax-cover-changer')
+        $wc.Encoding = [Text.Encoding]::UTF8
+        $script:UpdateTask = $wc.DownloadStringTaskAsync([uri]$RepoApi)
+        $script:UpdateStarted = Get-Date
+        $script:UpdatePoll = New-Object Windows.Threading.DispatcherTimer
+        $script:UpdatePoll.Interval = [TimeSpan]::FromMilliseconds(500)
+        $script:UpdatePoll.Add_Tick({
+            if (-not $script:UpdateTask.IsCompleted) {
+                if (((Get-Date) - $script:UpdateStarted).TotalSeconds -gt 30) { $script:UpdatePoll.Stop() }
+                return
+            }
+            $script:UpdatePoll.Stop()
+            if ($script:UpdateTask.Status -ne 'RanToCompletion') { return }
+            try { Show-UpdateNotice ($script:UpdateTask.Result | ConvertFrom-Json) } catch { }
+        })
+        $script:UpdatePoll.Start()
+    } catch { }
+})
+
 $ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
 
@@ -626,6 +680,16 @@ if ($Test) {
         $g = $item.Tag
         "  {0,-45} Steam app: {1}" -f $item.Content, (Resolve-SteamAppId $g)
     }
+    "--- Update check (app version $AppVersion):"
+    try {
+        $rel = Invoke-RestMethod -UseBasicParsing -Uri $RepoApi -Headers @{ 'User-Agent' = 'pimax-cover-changer' }
+        "  latest on GitHub: $($rel.tag_name)"
+        "  newer than this app: " + [bool](Get-UpdateInfo $rel)
+        $fake = [pscustomobject]@{ tag_name = 'v9.9.9'; html_url = 'https://example.test/r' }
+        Show-UpdateNotice $fake
+        "  simulated v9.9.9 -> bar visible: $($ui.UpdateBar.Visibility); text: $($ui.UpdateText.Text)"
+        "  simulated v1.0.0 -> notice: " + [bool](Get-UpdateInfo ([pscustomobject]@{ tag_name = 'v1.0.0' }))
+    } catch { "  check failed: $($_.Exception.Message)" }
     "--- Library order window (not shown):"
     Show-Order | ForEach-Object { "  $_" }
     "--- Pin list write test (in memory only):"
