@@ -99,11 +99,91 @@ function Restore-Cover($game) {
     Remove-Item $backup -Force
 }
 
+# ---------- Image finder (Steam + SteamGridDB) ----------
+$SettingsFile = Join-Path $PimaxDir 'cover-changer-settings.json'
+function Get-SgdbKey {
+    try { $k = ([IO.File]::ReadAllText($SettingsFile) | ConvertFrom-Json).sgdbKey; if ($k) { return [string]$k } } catch { }
+    return ''
+}
+function Set-SgdbKey([string]$key) {
+    [IO.File]::WriteAllText($SettingsFile, ([pscustomobject]@{ sgdbKey = $key } | ConvertTo-Json), $Utf8NoBom)
+}
+
+function Resolve-SteamAppId($game) {
+    $j = [IO.File]::ReadAllText($game.File).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    if ([string]$j.id -match '^steam\.app\.(\d+)$') { return $Matches[1] }
+    $route = [string]$j.route
+    if ($route -match '^steam://\w+/(\d+)') { return $Matches[1] }
+    if ($route -like '*.lnk' -and (Test-Path -LiteralPath $route)) {
+        try { $route = (New-Object -ComObject WScript.Shell).CreateShortcut($route).TargetPath } catch { }
+    }
+    if ($route -match '^(.*\\steamapps)\\common\\([^\\]+)') {
+        $apps = $Matches[1]; $folder = $Matches[2]
+        foreach ($acf in Get-ChildItem -LiteralPath $apps -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue) {
+            $txt = [IO.File]::ReadAllText($acf.FullName)
+            if ($txt -match '"installdir"\s+"([^"]+)"' -and $Matches[1] -ieq $folder) {
+                if ($txt -match '"appid"\s+"(\d+)"') { return $Matches[1] }
+            }
+        }
+    }
+    return $null
+}
+
+function New-Art([string]$label, [string]$thumb, [string]$url) { [pscustomobject]@{ Label = $label; Thumb = $thumb; Url = $url } }
+
+function Get-SteamArt([string]$appId, [string]$name) {
+    $base = "https://shared.steamstatic.com/store_item_assets/steam/apps/$appId"
+    New-Art "$name - Steam banner" "$base/header.jpg" "$base/header.jpg"
+    New-Art "$name - Steam capsule" "$base/capsule_616x353.jpg" "$base/capsule_616x353.jpg"
+}
+
+function Search-SteamStore([string]$term) {
+    $r = Invoke-RestMethod -UseBasicParsing -Uri ("https://store.steampowered.com/api/storesearch/?term={0}&cc=us&l=english" -f [uri]::EscapeDataString($term))
+    @($r.items) | Select-Object -First 5
+}
+
+function Invoke-Sgdb([string]$path) {
+    Invoke-RestMethod -UseBasicParsing -Uri "https://www.steamgriddb.com/api/v2/$path" -Headers @{ Authorization = "Bearer $(Get-SgdbKey)" }
+}
+
+function Get-SgdbGrids([string]$kind, [string]$id, [string]$name, [int]$max) {
+    $r = Invoke-Sgdb "grids/$kind/$id`?dimensions=460x215,920x430&types=static"
+    @($r.data) | Select-Object -First $max | ForEach-Object {
+        New-Art "$name - SteamGridDB $($_.width)x$($_.height)" $_.thumb $_.url
+    }
+}
+
+function Find-Art($game, [string]$term, [bool]$exact) {
+    $items = New-Object Collections.ArrayList
+    $notes = @()
+    $hasKey = [bool](Get-SgdbKey)
+    $appId = if ($exact) { Resolve-SteamAppId $game } else { $null }
+    if ($appId) {
+        $notes += "Matched Steam app $appId."
+        foreach ($a in Get-SteamArt $appId $game.Name) { [void]$items.Add($a) }
+        if ($hasKey) {
+            try { foreach ($a in Get-SgdbGrids 'steam' $appId $game.Name 30) { [void]$items.Add($a) } }
+            catch { $notes += "SteamGridDB error: $($_.Exception.Message)" }
+        }
+    } else {
+        try { foreach ($s in Search-SteamStore $term) { [void]$items.Add((Get-SteamArt ([string]$s.id) $s.name)[0]) } }
+        catch { $notes += "Steam search failed: $($_.Exception.Message)" }
+        if ($hasKey) {
+            try {
+                $found = @((Invoke-Sgdb ("search/autocomplete/{0}" -f [uri]::EscapeDataString($term))).data) | Select-Object -First 3
+                foreach ($g in $found) { foreach ($a in Get-SgdbGrids 'game' ([string]$g.id) $g.name 10) { [void]$items.Add($a) } }
+            } catch { $notes += "SteamGridDB error: $($_.Exception.Message)" }
+        }
+    }
+    if (-not $hasKey) { $notes += 'Add a SteamGridDB key for many more choices.' }
+    [pscustomobject]@{ Items = $items; Note = ($notes -join ' ') }
+}
+
 # ---------- Window ----------
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pimax Cover Changer" Width="900" Height="560" MinWidth="760" MinHeight="480"
+        Title="Pimax Cover Changer" Width="1020" Height="580" MinWidth="900" MinHeight="480"
         Background="#1B1B1B" Foreground="#EDEDED" FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterScreen">
   <Window.Resources>
     <Style TargetType="Button">
@@ -125,8 +205,9 @@ function Restore-Cover($game) {
       <TextBlock x:Name="GameTitle" DockPanel.Dock="Top" Text="Pick a game on the left" FontSize="18" FontWeight="SemiBold"/>
       <TextBlock x:Name="GameInfo" DockPanel.Dock="Top" Foreground="#9A9A9A" Margin="0,2,0,10" TextWrapping="Wrap"/>
       <StackPanel DockPanel.Dock="Bottom">
-        <TextBlock Text="New image: paste a link (e.g. from SteamGridDB) or browse for a file" Foreground="#BDBDBD" Margin="0,10,0,4"/>
+        <TextBlock Text="New image: click Find image, paste a link, or browse for a file" Foreground="#BDBDBD" Margin="0,10,0,4"/>
         <DockPanel>
+          <Button x:Name="FindBtn" DockPanel.Dock="Right" Content="Find image" Margin="8,0,0,0" Background="#1565C0" BorderBrush="#1E88E5" FontWeight="SemiBold"/>
           <Button x:Name="BrowseBtn" DockPanel.Dock="Right" Content="Browse..." Margin="8,0,0,0"/>
           <Button x:Name="PreviewBtn" DockPanel.Dock="Right" Content="Preview" Margin="8,0,0,0"/>
           <TextBox x:Name="SourceBox" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" Padding="6,6" VerticalContentAlignment="Center"/>
@@ -135,6 +216,7 @@ function Restore-Cover($game) {
           <Button x:Name="ApplyBtn" Content="Apply image" Background="#2E7D32" BorderBrush="#43A047" FontWeight="SemiBold"/>
           <Button x:Name="RestoreBtn" Content="Restore original" Margin="8,0,0,0"/>
           <Button x:Name="RestartBtn" Content="Restart Pimax Play" Margin="8,0,0,0"/>
+          <Button x:Name="KeyBtn" Content="SteamGridDB key..." Margin="8,0,0,0"/>
         </StackPanel>
       </StackPanel>
       <Border Background="#111" CornerRadius="8" BorderBrush="#333" BorderThickness="1">
@@ -152,7 +234,7 @@ function Restore-Cover($game) {
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
 
 # ---------- Behaviour ----------
 function Set-Status([string]$msg, [bool]$isError = $false) {
@@ -240,6 +322,83 @@ $ui.RestoreBtn.Add_Click({
     catch { Set-Status $_.Exception.Message $true }
 })
 
+function Show-Finder($game) {
+    [xml]$fx = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Find image" Width="1010" Height="660" Background="#1B1B1B" Foreground="#EDEDED"
+        FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterOwner">
+  <DockPanel Margin="14">
+    <DockPanel DockPanel.Dock="Top">
+      <Button x:Name="SearchBtn" DockPanel.Dock="Right" Content="Search by name" Margin="8,0,0,0" Padding="14,7"
+              Background="#2E2E2E" Foreground="#EDEDED" BorderBrush="#444" Cursor="Hand"/>
+      <TextBox x:Name="Term" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A" Padding="6,6" VerticalContentAlignment="Center"/>
+    </DockPanel>
+    <TextBlock x:Name="Note" DockPanel.Dock="Top" Foreground="#9A9A9A" Margin="0,8,0,8" TextWrapping="Wrap"/>
+    <TextBlock DockPanel.Dock="Bottom" Text="Click an image to use it." Foreground="#9A9A9A" Margin="0,8,0,0"/>
+    <ScrollViewer VerticalScrollBarVisibility="Auto"><WrapPanel x:Name="Results"/></ScrollViewer>
+  </DockPanel>
+</Window>
+'@
+    $fw = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $fx))
+    $fw.Owner = $window
+    $script:finderPick = $null
+    $termBox = $fw.FindName('Term'); $noteBlock = $fw.FindName('Note'); $results = $fw.FindName('Results')
+    $termBox.Text = $game.Name
+
+    $run = {
+        param([bool]$exact)
+        $results.Children.Clear()
+        $noteBlock.Text = 'Searching...'
+        $fw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        $found = Find-Art $game $termBox.Text.Trim() $exact
+        foreach ($c in $found.Items) {
+            $bmp = New-Object Windows.Media.Imaging.BitmapImage
+            $bmp.BeginInit(); $bmp.UriSource = [uri]$c.Thumb; $bmp.DecodePixelWidth = 300; $bmp.EndInit()
+            $img = New-Object Windows.Controls.Image
+            $img.Source = $bmp; $img.Width = 300; $img.Height = 140; $img.Stretch = 'Uniform'
+            $cap = New-Object Windows.Controls.TextBlock
+            $cap.Text = $c.Label; $cap.Width = 300; $cap.TextTrimming = 'CharacterEllipsis'; $cap.Foreground = '#BDBDBD'; $cap.Margin = '0,4,0,0'
+            $sp = New-Object Windows.Controls.StackPanel
+            [void]$sp.Children.Add($img); [void]$sp.Children.Add($cap)
+            $btn = New-Object Windows.Controls.Button
+            $btn.Content = $sp; $btn.Tag = $c.Url; $btn.Margin = '6'; $btn.Padding = '6'
+            $btn.Background = '#232323'; $btn.BorderBrush = '#3A3A3A'; $btn.Cursor = 'Hand'; $btn.ToolTip = $c.Url
+            $btn.Add_Click({ $script:finderPick = $this.Tag; $fw.Close() })
+            [void]$results.Children.Add($btn)
+        }
+        $noteBlock.Text = if ($found.Items.Count) { "$($found.Items.Count) images found. $($found.Note)" } else { "No images found - try a different name. $($found.Note)" }
+    }
+
+    $fw.FindName('SearchBtn').Add_Click({ & $run $false })
+    $termBox.Add_KeyDown({ if ($_.Key -eq 'Return') { & $run $false } })
+    $fw.Add_ContentRendered({ & $run $true })
+    [void]$fw.ShowDialog()
+}
+
+$ui.FindBtn.Add_Click({
+    $g = Selected-Game
+    if (-not $g) { Set-Status 'Pick a game on the left first.' $true; return }
+    Show-Finder $g | Out-Null
+    if ($script:finderPick) {
+        $ui.SourceBox.Text = $script:finderPick
+        Set-Status 'Loading preview...'
+        try { Show-Preview $script:finderPick; Set-Status 'Preview of the new image. Click "Apply image" to use it.' }
+        catch { Set-Status "Couldn't load that image: $($_.Exception.Message)" $true }
+    }
+})
+
+$ui.KeyBtn.Add_Click({
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $current = Get-SgdbKey
+    $k = [Microsoft.VisualBasic.Interaction]::InputBox("Paste your SteamGridDB API key.`n`nGet one free: sign in at steamgriddb.com, then Preferences > API.", 'SteamGridDB key', $current).Trim()
+    if (-not $k -or $k -eq $current) { return }
+    Set-SgdbKey $k
+    Set-Status 'Checking key...'
+    try { Invoke-Sgdb 'search/autocomplete/portal' | Out-Null; Set-Status 'SteamGridDB key saved and working.' }
+    catch { Set-Status "Key saved, but SteamGridDB rejected it: $($_.Exception.Message)" $true }
+})
+
 $ui.RestartBtn.Add_Click({ Finish-Restart 'Pimax Play restarted.' })
 $ui.RefreshBtn.Add_Click({ Fill-List; Set-Status 'Library list refreshed.' })
 
@@ -248,7 +407,17 @@ if ($ui.GameList.Items.Count -eq 0) { Set-Status "No games found in $ManifestDir
 
 if ($Test) {
     "TEST OK: window built, $($ui.GameList.Items.Count) games listed"
-    $ui.GameList.Items | ForEach-Object { "  " + $_.Content }
+    foreach ($item in $ui.GameList.Items) {
+        $g = $item.Tag
+        "  {0,-45} Steam app: {1}" -f $item.Content, (Resolve-SteamAppId $g)
+    }
+    $first = $ui.GameList.Items[0].Tag
+    $r = Find-Art $first $first.Name $true
+    "Find-Art exact for $($first.Name): $($r.Items.Count) items. $($r.Note)"
+    $r.Items | ForEach-Object { "    " + $_.Label + " -> " + $_.Url }
+    $r = Find-Art $first 'Half-Life 2' $false
+    "Find-Art search 'Half-Life 2': $($r.Items.Count) items. $($r.Note)"
+    $r.Items | ForEach-Object { "    " + $_.Label }
     return
 }
 [void]$window.ShowDialog()

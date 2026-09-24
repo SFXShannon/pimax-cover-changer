@@ -6,12 +6,12 @@ A small Windows tool for setting custom library images (cover art) in **Pimax Pl
 
 Grab **`PimaxCoverChanger.exe`** from this repo and run it. It asks for admin rights because it restarts the Pimax service so the new image shows up.
 
-Windows SmartScreen or Defender may warn about it as an unrecognized app. If you'd rather not run the exe, use the script instead (see below). It's the same code.
+Windows SmartScreen or Defender may warn about it as an unrecognized app. If you'd rather not run the exe, run the script instead (see below). It's the same code.
 
 ## How to use
 
 1. Pick a game from your Pimax library on the left.
-2. Paste an image link (for example from [SteamGridDB](https://www.steamgriddb.com/)) or click **Browse...** for an image file. Click **Preview** to check it.
+2. Click **Find image** to search for art automatically, or paste an image link, or click **Browse...** for an image file.
 3. Click **Apply image**. The tool saves the image, updates the game's entry, and restarts Pimax Play.
 
 Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
@@ -19,11 +19,20 @@ Wide banner images (about 460x215 or 920x430) fit Pimax tiles best.
 - **Restore original** puts a game back to its original image.
 - **Restart Pimax Play** restarts Pimax without changing anything.
 
+## Find image
+
+**Find image** shows a gallery of matching art. Click one to use it.
+
+- **Steam:** If the game is a Steam game, or an imported game whose .exe sits in a Steam library folder, the tool reads Steam's install records to get the exact game and shows its official banners. Otherwise it searches the Steam store by name. No account needed.
+- **SteamGridDB (optional):** Adds many more choices, including community art and art for non-Steam games. Get a free API key by signing in at [steamgriddb.com](https://www.steamgriddb.com/), then **Preferences > API**. Paste it in with the **SteamGridDB key...** button. The key is stored locally in `%APPDATA%\Pimax\cover-changer-settings.json`.
+
+If the automatic match is wrong, type a different name in the search box and click **Search by name**.
+
 ## How it works
 
 Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`. The tile image comes from the entry's `icon` field, which accepts a web link or a local file path. This tool:
 
-- copies your image to `%APPDATA%\Pimax\covers` so it keeps working if you move or delete the original,
+- copies the chosen image to `%APPDATA%\Pimax\covers` so it keeps working offline and if the original moves,
 - backs up the original entry to `%APPDATA%\Pimax\cover-backups` the first time you change it,
 - writes the entry back as UTF-8 **without a BOM** (Pimax silently drops entries saved with one),
 - restarts the `PiServiceLauncher` service and Pimax Play, because the service keeps entries in memory until it restarts.
@@ -35,8 +44,6 @@ Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`
 
 ## Run from the script
 
-Double-click `Pimax Cover Changer.bat`, or run:
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 ```
@@ -45,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.0.0
+Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.1.0
 ```
 
-Not affiliated with Pimax.
+Not affiliated with Pimax or Valve. Game art belongs to its respective owners.
