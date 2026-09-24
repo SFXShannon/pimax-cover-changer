@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxCoverChanger.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.1.0
+Invoke-ps2exe .\PimaxCoverChanger.ps1 .\PimaxCoverChanger.exe -iconFile .\PimaxCoverChanger.ico -noConsole -requireAdmin -STA -title "Pimax Cover Changer" -version 1.0.0
 ```
 
 ## License

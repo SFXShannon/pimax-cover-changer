@@ -236,6 +236,20 @@ $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml)
 $ui = @{}
 foreach ($n in 'GameList','RefreshBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status') { $ui[$n] = $window.FindName($n) }
 
+# Window icon: the exe's own icon, or PimaxCoverChanger.ico next to the script
+$script:AppIcon = $null
+try {
+    Add-Type -AssemblyName System.Drawing
+    $exePath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $ico = $null
+    if ([IO.Path]::GetFileNameWithoutExtension($exePath) -ieq 'PimaxCoverChanger') { $ico = [Drawing.Icon]::ExtractAssociatedIcon($exePath) }
+    elseif ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'PimaxCoverChanger.ico'))) { $ico = New-Object Drawing.Icon (Join-Path $PSScriptRoot 'PimaxCoverChanger.ico') }
+    if ($ico) {
+        $script:AppIcon = [Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($ico.Handle, [Windows.Int32Rect]::Empty, [Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        $window.Icon = $script:AppIcon
+    }
+} catch { }
+
 # ---------- Behaviour ----------
 function Set-Status([string]$msg, [bool]$isError = $false) {
     $ui.Status.Foreground = if ($isError) { '#EF5350' } else { '#8BC34A' }
@@ -342,6 +356,7 @@ function Show-Finder($game) {
 '@
     $fw = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $fx))
     $fw.Owner = $window
+    if ($script:AppIcon) { $fw.Icon = $script:AppIcon }
     $script:finderPick = $null
     $termBox = $fw.FindName('Term'); $noteBlock = $fw.FindName('Note'); $results = $fw.FindName('Results')
     $termBox.Text = $game.Name
