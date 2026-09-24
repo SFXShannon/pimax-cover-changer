@@ -10,7 +10,11 @@ A Windows tool for managing your **Pimax Play** library: set custom cover images
 
 ## Download
 
-Get **`PimaxGameManager.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It asks for admin rights because it restarts the Pimax service so your changes take effect.
+Get **`PimaxGameManagerSetup.exe`** from the [latest release](https://github.com/SFXShannon/pimax-game-manager/releases/latest) and run it. It installs to your user folder (no admin needed to install), adds a Start menu shortcut, and offers a desktop shortcut. To update, run the newer setup over the top. Uninstall from Windows **Settings > Apps**; your backups and settings are kept.
+
+Prefer no install? Download **`PimaxGameManager.exe`** from the same page and run it from anywhere.
+
+The app asks for admin rights when it starts, because it restarts the Pimax service so your changes take effect.
 
 Windows SmartScreen or Defender may warn about it as an unrecognized app. If you'd rather not run the exe, run the script instead (see below). It's the same code.
 
@@ -98,8 +102,9 @@ The bottom-right corner shows the app version and whether it's **Up to date**, h
 - **Found a bug?** [Open a bug report](https://github.com/SFXShannon/pimax-game-manager/issues/new?template=bug_report.yml). The **Report a problem** link in the bottom-right of the app opens it with your app version filled in.
 - **Have an idea?** [Suggest a feature](https://github.com/SFXShannon/pimax-game-manager/issues/new?template=feature_request.yml), or post it under Ideas in [Discussions](https://github.com/SFXShannon/pimax-game-manager/discussions).
 - **Need help or have a question?** Ask in [Discussions](https://github.com/SFXShannon/pimax-game-manager/discussions/categories/q-a).
+- **No GitHub account?** Join the conversation in the [r/Pimax thread](https://www.reddit.com/r/Pimax/comments/1woshmk/).
 
-Posting needs a free GitHub account.
+Posting on GitHub needs a free account.
 
 ## How it works
 
@@ -126,6 +131,12 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
 Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.2
+```
+
+To build the installer too, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=1.5.2 .\PimaxGameManager.iss
 ```
 
 ## License

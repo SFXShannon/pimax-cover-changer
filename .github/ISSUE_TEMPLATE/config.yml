@@ -6,3 +6,6 @@ contact_links:
   - name: Ideas and general chat
     url: https://github.com/SFXShannon/pimax-game-manager/discussions
     about: Share ideas, vote in polls, or show off your library.
+  - name: r/Pimax thread
+    url: https://www.reddit.com/r/Pimax/comments/1woshmk/
+    about: The Reddit discussion about Pimax Game Manager.
