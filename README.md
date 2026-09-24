@@ -2,7 +2,7 @@
 
 A small Windows tool for setting custom library images (cover art) in **Pimax Play**, especially for games you added with **Import**, which otherwise show the default gamepad tile.
 
-![Pimax Cover Changer](screenshots/main-window.png)
+![Pimax Cover Changer](screenshots/main-window-v1.2.1.png)
 
 ## Download
 
