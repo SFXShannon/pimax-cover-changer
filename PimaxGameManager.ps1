@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.4.2'
+$AppVersion = '1.4.3'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -861,7 +861,7 @@ function Show-Order {
         $row.Orientation = 'Horizontal'
         foreach ($c in $grip, $cb, $name, $src) { [void]$row.Children.Add($c) }
         $item = New-Object Windows.Controls.ListBoxItem
-        $item.Content = $row; $item.Padding = '6,6'; $item.Cursor = 'SizeAll'
+        $item.Content = $row; $item.Padding = '6,4'; $item.Cursor = 'SizeAll'; $item.BorderThickness = '0,2,0,2'; $item.BorderBrush = 'Transparent'
         $item.Tag = [pscustomobject]@{ Game = $g; Check = $cb }
         [void]$script:lb.Items.Add($item)
     }
@@ -875,6 +875,43 @@ function Show-Order {
         }
         return $el
     }
+    # The row under the mouse (including over its checkbox) - used while dragging
+    $script:itemAt = {
+        param($el)
+        while ($el -and -not ($el -is [Windows.Controls.ListBoxItem])) {
+            $el = if ($el -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($el) } else { $el.Parent }
+        }
+        return $el
+    }
+
+    # Drag visuals: a floating label with the game's name, and a blue line where it will land
+    $ghostText = New-Object Windows.Controls.TextBlock; $ghostText.Foreground = 'White'; $ghostText.FontWeight = 'SemiBold'
+    $ghostBox = New-Object Windows.Controls.Border
+    $ghostBox.Background = New-Object Windows.Media.SolidColorBrush([Windows.Media.Color]::FromArgb(230, 21, 101, 192))
+    $ghostBox.BorderBrush = '#90CAF9'; $ghostBox.BorderThickness = '1'; $ghostBox.CornerRadius = '4'; $ghostBox.Padding = '10,5'
+    $ghostBox.Child = $ghostText
+    $script:orderGhost = New-Object Windows.Controls.Primitives.Popup
+    $script:orderGhost.Child = $ghostBox; $script:orderGhost.AllowsTransparency = $true; $script:orderGhost.IsHitTestVisible = $false
+    $script:orderGhost.PlacementTarget = $script:lb; $script:orderGhost.Placement = 'Relative'
+    $script:orderGhostText = $ghostText
+    $script:orderMark = $null
+
+    $script:clearMark = {
+        if ($script:orderMark) { $script:orderMark.BorderThickness = '0,2,0,2'; $script:orderMark.BorderBrush = 'Transparent'; $script:orderMark = $null }
+    }
+    # Moves the label to the mouse and marks where the dragged game would land
+    $script:dragFeedback = {
+        param($pos, $over)
+        $script:orderGhost.HorizontalOffset = $pos.X + 14; $script:orderGhost.VerticalOffset = $pos.Y + 6
+        $src = $script:orderDragging
+        if (-not $over -or $over -eq $src) { & $script:clearMark; return }
+        if ($over -ne $script:orderMark) { & $script:clearMark }
+        $below = $script:lb.Items.IndexOf($src) -lt $script:lb.Items.IndexOf($over)
+        $over.BorderBrush = '#42A5F5'
+        $over.BorderThickness = $(if ($below) { '0,0,0,4' } else { '0,4,0,0' })
+        $script:orderMark = $over
+    }
+
     $script:orderDrag = $null
     $script:lb.Add_PreviewMouseLeftButtonDown({ $script:orderDrag = & $script:findItem $_.OriginalSource; $script:orderStart = $_.GetPosition($script:lb) })
     $script:lb.Add_PreviewMouseMove({
@@ -882,12 +919,30 @@ function Show-Order {
         $p = $_.GetPosition($script:lb)
         if ([Math]::Abs($p.Y - $script:orderStart.Y) -lt 5 -and [Math]::Abs($p.X - $script:orderStart.X) -lt 5) { return }
         $it = $script:orderDrag; $script:orderDrag = $null
-        [void][Windows.DragDrop]::DoDragDrop($script:lb, $it, [Windows.DragDropEffects]::Move)
+        $script:orderDragging = $it
+        $script:orderGhostText.Text = [string][char]0x2261 + '  ' + $it.Tag.Game.Name
+        $it.Opacity = 0.35
+        & $script:dragFeedback $p $null
+        $script:orderGhost.IsOpen = $true
+        try { [void][Windows.DragDrop]::DoDragDrop($script:lb, $it, [Windows.DragDropEffects]::Move) }
+        finally {
+            $script:orderGhost.IsOpen = $false
+            $it.Opacity = 1
+            & $script:clearMark
+            $script:orderDragging = $null
+        }
+    })
+    $script:lb.Add_DragLeave({ & $script:clearMark })
+    # Replace Windows' drag pointer (arrow with a box) with a plain arrow; the name label shows what is moving
+    $script:lb.Add_GiveFeedback({
+        $_.UseDefaultCursors = $false
+        [Windows.Input.Mouse]::SetCursor([Windows.Input.Cursors]::Arrow)
+        $_.Handled = $true
     })
     $script:lb.Add_Drop({
         $srcItem = $_.Data.GetData([Windows.Controls.ListBoxItem])
         if (-not $srcItem) { return }
-        $target = & $script:findItem $_.OriginalSource
+        $target = & $script:itemAt $_.OriginalSource
         $to = if ($target) { $script:lb.Items.IndexOf($target) } else { $script:lb.Items.Count - 1 }
         if ($target -eq $srcItem) { return }
         $script:lb.Items.Remove($srcItem)
@@ -899,6 +954,7 @@ function Show-Order {
     $script:orderSv = $null; $script:orderLastScroll = 0
     $script:lb.Add_DragOver({
         $_.Effects = [Windows.DragDropEffects]::Move
+        & $script:dragFeedback ($_.GetPosition($this)) (& $script:itemAt $_.OriginalSource)
         if (-not $script:orderSv) { $script:orderSv = Get-ScrollViewer $this }
         $sv = $script:orderSv; if (-not $sv) { return }
         $y = $_.GetPosition($this).Y; $zone = 50; $h = $this.ActualHeight
