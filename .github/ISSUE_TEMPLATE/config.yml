@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/SFXShannon/pimax-game-manager/discussions/categories/q-a
+    about: Not sure if it's a bug, or need help using the app? Ask here.
+  - name: Ideas and general chat
+    url: https://github.com/SFXShannon/pimax-game-manager/discussions
+    about: Share ideas, vote in polls, or show off your library.

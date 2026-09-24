@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.5.1'
+$AppVersion = '1.5.2'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -657,6 +657,9 @@ function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings, [
     <DockPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,12,0,0">
       <TextBlock x:Name="VersionLabel" DockPanel.Dock="Right" Margin="16,0,0,0" Foreground="#8A8A8A" Cursor="Hand"
                  VerticalAlignment="Bottom" ToolTip="Click to check for updates"/>
+      <TextBlock x:Name="ReportLink" DockPanel.Dock="Right" Margin="16,0,0,0" Foreground="#42A5F5" Cursor="Hand"
+                 VerticalAlignment="Bottom" Text="Report a problem" TextDecorations="Underline"
+                 ToolTip="Open a bug report on GitHub (needs a free GitHub account)"/>
       <TextBlock x:Name="Status" Foreground="#8BC34A" TextWrapping="Wrap"
                  Text="Wide banner images (about 460x215 or 920x430) fit Pimax tiles best."/>
     </DockPanel>
@@ -665,7 +668,7 @@ function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings, [
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
+foreach ($n in 'GameList','RefreshBtn','OrderBtn','SettingsBtn','GameTitle','GameInfo','SourceBox','BrowseBtn','PreviewBtn','FindBtn','KeyBtn','ApplyBtn','RestoreBtn','RestartBtn','PreviewImg','NoImage','Status','UpdateBar','UpdateText','UpdateBtn','UpdateClose','VersionLabel','ReportLink','BackupBtn','ResetBar','ResetText','ResetRestore','ResetDismiss') { $ui[$n] = $window.FindName($n) }
 $window.Title = "Pimax Game Manager $AppVersion"
 
 # Window icon: the exe's own icon, or PimaxGameManager.ico next to the script
@@ -1641,6 +1644,10 @@ function Start-UpdateCheck {
     } catch { Set-VersionLabel 'failed' }
 }
 
+# Bug report form on GitHub, with the app version filled in
+function Get-ReportUrl { 'https://github.com/SFXShannon/pimax-game-manager/issues/new?template=bug_report.yml&version=' + [uri]::EscapeDataString($AppVersion) }
+$ui.ReportLink.Add_MouseLeftButtonUp({ try { Start-Process (Get-ReportUrl) } catch { Set-Status "Couldn't open the browser. Report problems at github.com/SFXShannon/pimax-game-manager/issues" $true } })
+
 $ui.UpdateBtn.Add_Click({ if ($script:UpdateUrl) { Start-Process $script:UpdateUrl } })
 $ui.UpdateClose.Add_Click({ $ui.UpdateBar.Visibility = 'Collapsed' })
 $ui.VersionLabel.Add_MouseLeftButtonUp({
@@ -1671,6 +1678,7 @@ if ($Test) {
         "  simulated v9.9.9 -> bar visible: $($ui.UpdateBar.Visibility); text: $($ui.UpdateText.Text)"
         "  simulated v1.0.0 -> notice: " + [bool](Get-UpdateInfo ([pscustomobject]@{ tag_name = 'v1.0.0' }))
     } catch { "  check failed: $($_.Exception.Message)" }
+    "--- Report link: '$($ui.ReportLink.Text)' -> $(Get-ReportUrl)"
     "--- Game settings (on a temporary copy of AppConfig; Pimax is not touched):"
     $realCfg = $AppConfigDir
     $AppConfigDir = Join-Path $env:TEMP ('pgm-test-' + [guid]::NewGuid().ToString('N'))

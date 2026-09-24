@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in Pimax Game Manager doesn't work as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more detail you give, the faster it can be fixed.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown in the bottom-right corner of the app (for example 1.5.2).
+      placeholder: "1.5.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Library images / Find image
+        - Library order
+        - Game settings
+        - Backup & restore
+        - Update check
+        - Starting the app
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Picked a game and clicked Find image
+        2. ...
+        Expected: ...
+        Actually: ...
+    validations:
+      required: true
+  - type: textarea
+    id: status-message
+    attributes:
+      label: Message shown by the app
+      description: Copy any error or status message from the bottom of the window or a pop-up.
+      render: text
+  - type: input
+    id: pimax-version
+    attributes:
+      label: Pimax Play version
+      description: If you know it.
+      placeholder: "e.g. 1.x.x"
+  - type: input
+    id: headset
+    attributes:
+      label: Headset
+      placeholder: "e.g. Crystal Light, Crystal Super, 8KX"
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How do you run it?
+      options:
+        - The .exe
+        - The .ps1 script
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images here if they help show the problem.

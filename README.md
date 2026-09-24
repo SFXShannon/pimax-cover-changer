@@ -93,6 +93,14 @@ When the app opens, it checks this repo for a newer release in the background. I
 
 The bottom-right corner shows the app version and whether it's **Up to date**, has an **Update available**, or **Couldn't check** (for example when offline). Click it to check again.
 
+## Feedback & bug reports
+
+- **Found a bug?** [Open a bug report](https://github.com/SFXShannon/pimax-game-manager/issues/new?template=bug_report.yml). The **Report a problem** link in the bottom-right of the app opens it with your app version filled in.
+- **Have an idea?** [Suggest a feature](https://github.com/SFXShannon/pimax-game-manager/issues/new?template=feature_request.yml), or post it under Ideas in [Discussions](https://github.com/SFXShannon/pimax-game-manager/discussions).
+- **Need help or have a question?** Ask in [Discussions](https://github.com/SFXShannon/pimax-game-manager/discussions/categories/q-a).
+
+Posting needs a free GitHub account.
+
 ## How it works
 
 Pimax Play keeps each library entry as a JSON file in `%APPDATA%\Pimax\manifest`. The tile image comes from the entry's `icon` field, which accepts a web link or a local file path. This tool:
@@ -117,7 +125,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.1
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.2
 ```
 
 ## License

@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest something new or a change to an existing feature
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. For a quick "would anyone else want this?" chat, the Ideas category in Discussions works too.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Library images
+        - Library order
+        - Game settings
+        - Backup & restore
+        - Headset settings
+        - Something new
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the problem or the annoyance, not just the solution. For example "I set the same settings on 30 games every time I re-import them."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How would you like it to work?
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, mockups, or how you work around it today.
