@@ -36,7 +36,7 @@ try {
     if ((Test-Path $legacyCfg) -and -not (Test-Path $newCfg)) { Copy-Item $legacyCfg $newCfg }
 } catch { }
 $Utf8NoBom = New-Object Text.UTF8Encoding($false)
-$AppVersion = '1.4.3'
+$AppVersion = '1.5.0'
 $RepoApi = 'https://api.github.com/repos/SFXShannon/pimax-game-manager/releases/latest'
 
 # ---------- Library ----------
@@ -340,22 +340,48 @@ function Backup-SettingsOnce([string[]]$ids) {
     }
 }
 
-# Pimax's service keeps settings in memory, so change files only while it is stopped
-function Invoke-WhilePimaxStopped([scriptblock]$action) {
+# Pimax's service keeps settings in memory, so change files only while it is stopped.
+# -Full also stops the headset runtime (pi_server), which holds the headset profile and eye-tracking calibration.
+function Invoke-WhilePimaxStopped([scriptblock]$action, [switch]$Full) {
     $client = Get-ClientPath
     Get-Process PimaxClient -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 1
     $svcOk = $true
     try { Stop-Service $ServiceName -Force -ErrorAction Stop } catch { $svcOk = $false }
     Get-Process PiPlayService -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($Full) { Get-Process pi_server, pi_overlay, pi_vst, PimaxHome-Win64-Shipping -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
     $err = $null
     try { & $action } catch { $err = $_ }
     try { Start-Service $ServiceName -ErrorAction Stop } catch { $svcOk = $false }
     Start-Sleep -Seconds 3
     if (Test-Path $client) { Start-Process $client }
+    $script:RuntimeBack = $true
+    if ($Full) {
+        $script:RuntimeBack = $false
+        for ($i = 0; $i -lt 30 -and -not $script:RuntimeBack; $i++) { Start-Sleep -Seconds 1; $script:RuntimeBack = [bool](Get-Process pi_server -ErrorAction SilentlyContinue) }
+    }
     if ($err) { throw $err }
     return $svcOk
+}
+
+# ---------- Headset settings (eye-tracking calibration, headset profile, play area) ----------
+$HeadsetLocalDir   = Join-Path $env:LOCALAPPDATA 'Pimax\runtime'
+$HeadsetProgramDir = Join-Path $env:ProgramData 'Pimax\runtime'
+function Get-HeadsetFiles {
+    $out = @()
+    $pj = Join-Path $HeadsetLocalDir 'profile.json'
+    if (Test-Path $pj) { $out += [pscustomobject]@{ Area = 'local'; Name = 'profile.json'; Path = $pj; Kind = 'Headset profile (IPD, custom FOV, Quad View fine-tuning, audio)' } }
+    foreach ($f in Get-ChildItem $HeadsetLocalDir -Filter *.bin -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 5MB }) {
+        $out += [pscustomobject]@{ Area = 'local'; Name = $f.Name; Path = $f.FullName; Kind = 'Eye-tracking calibration' }
+    }
+    foreach ($f in Get-ChildItem $HeadsetProgramDir -Filter *.vrchap -File -ErrorAction SilentlyContinue) {
+        $out += [pscustomobject]@{ Area = 'programdata'; Name = $f.Name; Path = $f.FullName; Kind = 'Play area' }
+    }
+    $out
+}
+function Get-HeadsetTarget([string]$area, [string]$name) {
+    if ($area -eq 'programdata') { Join-Path $HeadsetProgramDir $name } else { Join-Path $HeadsetLocalDir $name }
 }
 
 # ---------- Backups (snapshots of images, library order and game settings) ----------
@@ -388,6 +414,10 @@ function Get-StateFingerprint {
     [void]$sb.Append('pins|' + ((Get-PinnedIds) -join ',') + "`n")
     foreach ($f in (Get-ChildItem $AppConfigDir -Filter *.json -ErrorAction SilentlyContinue | Sort-Object Name)) {
         [void]$sb.Append("cfg|$($f.Name)|$((Get-FileHash $f.FullName -Algorithm MD5).Hash)`n")
+    }
+    foreach ($hf in (Get-HeadsetFiles | Sort-Object Name)) {
+        $txt = if ($hf.Name -eq 'profile.json') { [regex]::Replace([IO.File]::ReadAllText($hf.Path), '"GpuMeasure"\s*:\s*\{[^}]*\}', '') } else { (Get-FileHash $hf.Path -Algorithm MD5).Hash }
+        [void]$sb.Append("hs|$($hf.Area)|$($hf.Name)|$($txt.GetHashCode())`n")
     }
     $bytes = [Text.Encoding]::UTF8.GetBytes($sb.ToString())
     return [BitConverter]::ToString((New-Object Security.Cryptography.MD5CryptoServiceProvider).ComputeHash($bytes)).Replace('-', '')
@@ -422,10 +452,15 @@ function New-Snapshot([string]$reason, [switch]$IfChanged) {
         [pscustomobject]@{ id = $i.Id; name = $i.Name; route = $i.Route; file = $file; url = $(if ($i.Icon -match '^https?://') { $i.Icon } else { $null }) }
     }
     foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json -ErrorAction SilentlyContinue) { Copy-Item $f.FullName (Join-Path $dir 'settings') }
+    $headset = foreach ($hf in Get-HeadsetFiles) {
+        $hd = Join-Path $dir ("headset\" + $hf.Area); New-Item -ItemType Directory -Force $hd | Out-Null
+        Copy-Item -LiteralPath $hf.Path (Join-Path $hd $hf.Name) -Force
+        [pscustomobject]@{ area = $hf.Area; name = $hf.Name; kind = $hf.Kind }
+    }
     $games = foreach ($g in Get-PimaxGames) { [pscustomobject]@{ id = (Get-GameId $g); name = $g.Name; route = (Get-Route $g) } }
     $meta = [pscustomobject]@{
         created = (Get-Date).ToString('o'); reason = $reason; appVersion = $AppVersion; fingerprint = $fp
-        pinned = @(Get-PinnedIds); images = @($images); games = @($games)
+        pinned = @(Get-PinnedIds); images = @($images); games = @($games); headset = @($headset)
         settings = @(Get-ChildItem (Join-Path $dir 'settings') -Filter *.json | ForEach-Object BaseName)
     }
     [IO.File]::WriteAllText((Join-Path $dir 'snapshot.json'), ($meta | ConvertTo-Json -Depth 6), $Utf8NoBom)
@@ -469,15 +504,27 @@ function Compare-Snapshot($snap) {
         $cur = Resolve-SnapshotId $snap $s $idx.ById $idx.ByRoute
         if ($cur -and -not (Test-Path (Get-SettingsPath $cur))) { $s }
     })
-    [pscustomobject]@{ Images = $lostImages; Pins = $lostPins; Settings = $lostSettings
-                       Any = ($lostImages.Count -gt 0 -or $lostPins -or $lostSettings.Count -gt 0) }
+    $lostHeadset = @(foreach ($h in @($snap.headset)) { if ($h -and -not (Test-Path (Get-HeadsetTarget $h.area $h.name))) { $h.kind } })
+    [pscustomobject]@{ Images = $lostImages; Pins = $lostPins; Settings = $lostSettings; Headset = $lostHeadset
+                       Any = ($lostImages.Count -gt 0 -or $lostPins -or $lostSettings.Count -gt 0 -or $lostHeadset.Count -gt 0) }
 }
 
-function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings) {
+function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings, [bool]$headset = $false) {
     [void](New-Snapshot 'Before restore')
     $idx = Get-CurrentIndex
-    $report = [ordered]@{ Images = 0; Order = 0; Settings = 0; Skipped = @() }
-    $svcOk = Invoke-WhilePimaxStopped {
+    $report = [ordered]@{ Images = 0; Order = 0; Settings = 0; Headset = 0; Skipped = @() }
+    $svcOk = Invoke-WhilePimaxStopped -Full:$headset {
+        if ($headset) {
+            foreach ($h in @($snap.headset)) {
+                if (-not $h) { continue }
+                $src = Join-Path $snap.Path ("headset\" + $h.area + "\" + $h.name)
+                if (-not (Test-Path -LiteralPath $src)) { continue }
+                $dst = Get-HeadsetTarget $h.area $h.name
+                New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null
+                Copy-Item -LiteralPath $src $dst -Force
+                $report.Headset++
+            }
+        }
         if ($images) {
             foreach ($i in $snap.images) {
                 $cur = Resolve-SnapshotId $snap $i.id $idx.ById $idx.ByRoute
@@ -517,6 +564,7 @@ function Restore-Snapshot($snap, [bool]$images, [bool]$order, [bool]$settings) {
         }
     }
     $report.ServiceOk = $svcOk
+    $report.RuntimeBack = $script:RuntimeBack
     return [pscustomobject]$report
 }
 
@@ -1405,15 +1453,15 @@ $ui.SettingsBtn.Add_Click({
 # ---------- Backup & restore window ----------
 function Format-SnapshotLine($s) {
     $when = ([datetime]$s.created).ToString('MMM d, yyyy  h:mm tt')
-    $parts = @("$(@($s.images).Count) image(s)", "$(@($s.pinned).Count) pinned", "$(@($s.settings).Count) settings file(s)")
+    $parts = @("$(@($s.images).Count) image(s)", "$(@($s.pinned).Count) pinned", "$(@($s.settings).Count) settings file(s)", "$(@($s.headset | Where-Object { $_ }).Count) headset file(s)")
     "{0}   -   {1}   -   {2}" -f $when, $s.reason, ($parts -join ', ')
 }
 
 function Show-Backups($preselect, $lost) {
-    $script:bw = New-DarkWindow 'Backup & restore' 760 600 @'
+    $script:bw = New-DarkWindow 'Backup & restore' 900 600 @'
   <DockPanel Margin="14">
     <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#BDBDBD" Margin="0,0,0,10"
-      Text="A backup of your library images, library order and game settings is saved automatically every time you change them here, and when you open the app. If a Pimax update resets them, pick a backup and restore it."/>
+      Text="A backup of your library images, library order, game settings and headset settings (eye-tracking calibration, IPD and headset profile, play area) is saved automatically every time you change them here, and when you open the app. If a Pimax update resets them, pick a backup and restore it."/>
     <TextBlock x:Name="BStatus" DockPanel.Dock="Bottom" Margin="0,10,0,0" Foreground="#8BC34A" TextWrapping="Wrap"/>
     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
       <Button x:Name="BClose" DockPanel.Dock="Right" Content="Close" Margin="8,0,0,0"/>
@@ -1427,7 +1475,8 @@ function Show-Backups($preselect, $lost) {
       <TextBlock Text="Restore:" VerticalAlignment="Center" Margin="0,0,12,0"/>
       <CheckBox x:Name="BImages" Content="Library images" IsChecked="True" Margin="0,0,16,0"/>
       <CheckBox x:Name="BOrder" Content="Library order" IsChecked="True" Margin="0,0,16,0"/>
-      <CheckBox x:Name="BSettings" Content="Game settings" IsChecked="True"/>
+      <CheckBox x:Name="BSettings" Content="Game settings" IsChecked="True" Margin="0,0,16,0"/>
+      <CheckBox x:Name="BHeadset" Content="Headset (eye tracking, IPD, play area)" IsChecked="True"/>
     </StackPanel>
     <ListBox x:Name="BList" Background="#232323" Foreground="#EDEDED" BorderBrush="#3A3A3A"/>
   </DockPanel>
@@ -1451,6 +1500,7 @@ function Show-Backups($preselect, $lost) {
         $script:bw.FindName('BImages').IsChecked = ($lost.Images.Count -gt 0)
         $script:bw.FindName('BOrder').IsChecked = [bool]$lost.Pins
         $script:bw.FindName('BSettings').IsChecked = ($lost.Settings.Count -gt 0)
+        $script:bw.FindName('BHeadset').IsChecked = (@($lost.Headset).Count -gt 0)
         & $script:bSay 'The backup from before the reset is selected, with just the missing items ticked.'
     }
 
@@ -1463,16 +1513,17 @@ function Show-Backups($preselect, $lost) {
     $script:bw.FindName('BRestore').Add_Click({
         $it = $script:bList.SelectedItem
         if (-not $it) { & $script:bSay 'Pick a backup first.' $true; return }
-        $img = [bool]$script:bw.FindName('BImages').IsChecked; $ord = [bool]$script:bw.FindName('BOrder').IsChecked; $set = [bool]$script:bw.FindName('BSettings').IsChecked
-        if (-not ($img -or $ord -or $set)) { & $script:bSay 'Tick at least one thing to restore.' $true; return }
-        $what = @($(if ($img) { 'library images' }), $(if ($ord) { 'library order' }), $(if ($set) { 'game settings' })) | Where-Object { $_ }
-        $a = [Windows.MessageBox]::Show("Restore $($what -join ', ') from the backup of $(([datetime]$it.Tag.created).ToString('MMM d, h:mm tt'))?`n`nYour current state is backed up first, so you can undo this.", 'Restore backup', 'YesNo', 'Question')
+        $img = [bool]$script:bw.FindName('BImages').IsChecked; $ord = [bool]$script:bw.FindName('BOrder').IsChecked; $set = [bool]$script:bw.FindName('BSettings').IsChecked; $hs = [bool]$script:bw.FindName('BHeadset').IsChecked
+        if (-not ($img -or $ord -or $set -or $hs)) { & $script:bSay 'Tick at least one thing to restore.' $true; return }
+        $what = @($(if ($img) { 'library images' }), $(if ($ord) { 'library order' }), $(if ($set) { 'game settings' }), $(if ($hs) { 'headset settings' })) | Where-Object { $_ }
+        $a = [Windows.MessageBox]::Show("Restore $($what -join ', ') from the backup of $(([datetime]$it.Tag.created).ToString('MMM d, h:mm tt'))?`n`nYour current state is backed up first, so you can undo this.$(if ($hs) { "`n`nRestoring headset settings briefly restarts the Pimax headset software - take the headset off first." })", 'Restore backup', 'YesNo', 'Question')
         if ($a -ne 'Yes') { return }
         & $script:bSay 'Restoring - restarting Pimax...'
         $script:bw.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         try {
-            $r = Restore-Snapshot $it.Tag $img $ord $set
-            $msg = "Restored: $($r.Images) image(s), $($r.Order) pinned game(s) in order, $($r.Settings) settings file(s)."
+            $r = Restore-Snapshot $it.Tag $img $ord $set $hs
+            $msg = "Restored: $($r.Images) image(s), $($r.Order) pinned game(s) in order, $($r.Settings) settings file(s), $($r.Headset) headset file(s)."
+            if ($hs -and -not $r.RuntimeBack) { $msg += ' The Pimax headset software did not restart on its own - restart your PC to finish applying the headset settings.' }
             if ($r.Skipped.Count) { $msg += " Skipped (not in your library now): $($r.Skipped -join ', ')." }
             if (-not $r.ServiceOk) { $msg += ' Could not restart the Pimax service; restart your PC if it does not apply.' }
             & $script:bFill $it.Tag.Path
@@ -1498,6 +1549,7 @@ function Start-BackupCheck {
                 if ($cmp.Images.Count) { $bits += "$($cmp.Images.Count) library image(s)" }
                 if ($cmp.Pins) { $bits += 'your library order' }
                 if ($cmp.Settings.Count) { $bits += "$($cmp.Settings.Count) game settings file(s)" }
+                if (@($cmp.Headset).Count) { $bits += ((@($cmp.Headset) | Select-Object -Unique) -join ', ').ToLower() }
                 $script:ResetSnap = $last; $script:ResetLost = $cmp
                 $ui.ResetText.Text = "Pimax seems to have reset some of your changes ($($bits -join ', ')). Restore them from your backup of $(([datetime]$last.created).ToString('MMM d, h:mm tt'))?"
                 $ui.ResetBar.Visibility = 'Visible'
@@ -1602,7 +1654,7 @@ if ($Test) {
     $BackupDir = Join-Path $AppConfigDir '_backups'; New-Item -ItemType Directory $BackupDir | Out-Null
     $SnapshotDir = Join-Path $AppConfigDir '_snapshots'; New-Item -ItemType Directory $SnapshotDir | Out-Null
     $script:restarts = 0
-    function Invoke-WhilePimaxStopped([scriptblock]$action) { $script:restarts++; & $action; return $true }
+    function Invoke-WhilePimaxStopped([scriptblock]$action, [switch]$Full) { $script:restarts++; if ($Full) { $script:fullRestarts++ }; & $action; $script:RuntimeBack = $true; return $true }
     foreach ($f in Get-ChildItem $AppConfigDir -Filter *.json) {
         $before = [IO.File]::ReadAllText($f.FullName) -replace "`r`n", "`n"
         Write-GameSettings $f.BaseName (Read-GameSettings $f.BaseName)
@@ -1667,6 +1719,11 @@ if ($Test) {
     if (Test-Path $LegacyBackupDir) { Copy-Item $LegacyBackupDir (Join-Path $bt 'legacy') -Recurse }; $LegacyBackupDir = Join-Path $bt 'legacy'
     $CoverDir = Join-Path $bt 'covers'; $BackupDir = Join-Path $bt 'backups'; $SnapshotDir = Join-Path $bt 'snapshots'
     foreach ($d in $CoverDir, $BackupDir, $SnapshotDir) { New-Item -ItemType Directory $d -Force | Out-Null }
+    $HeadsetLocalDir = Join-Path $bt 'hs-local'; $HeadsetProgramDir = Join-Path $bt 'hs-programdata'
+    New-Item -ItemType Directory $HeadsetLocalDir, $HeadsetProgramDir -Force | Out-Null
+    Copy-Item (Join-Path $env:LOCALAPPDATA 'Pimax\runtime\profile.json'), (Join-Path $env:LOCALAPPDATA 'Pimax\runtime\*.bin') $HeadsetLocalDir -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $env:ProgramData 'Pimax\runtime\*.vrchap') $HeadsetProgramDir -ErrorAction SilentlyContinue
+    "  headset files found: " + ((Get-HeadsetFiles | ForEach-Object { "$($_.Name) [$($_.Kind)]" }) -join '; ')
     # give the copy a pinned order to protect
     [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) @('local.66be7fbb', 'local.384c724b', 'steam.app.1079800')), $Utf8NoBom)
     $d1 = New-Snapshot 'Manual'
@@ -1678,13 +1735,19 @@ if ($Test) {
     $cm = Join-Path $ManifestDir 'local.08db6433.json'; $j = Get-Content $cm -Raw | ConvertFrom-Json; $j.icon = ''; [IO.File]::WriteAllText($cm, ($j | ConvertTo-Json -Compress), $Utf8NoBom)
     [IO.File]::WriteAllText($ClientConfig, (Set-PinnedIdsInText ([IO.File]::ReadAllText($ClientConfig)) @()), $Utf8NoBom)
     Remove-Item (Join-Path $AppConfigDir 'steam.app.1079800.json')
+    Remove-Item (Join-Path $HeadsetLocalDir '*.bin'), (Join-Path $HeadsetProgramDir '*.vrchap')
+    $ipdOf = { ([regex]::Match([IO.File]::ReadAllText((Join-Path $HeadsetLocalDir 'profile.json')), '"ipd" : ([0-9.]+)')).Groups[1].Value }
+    $ipdBefore = & $ipdOf
+    $pjText = [IO.File]::ReadAllText((Join-Path $HeadsetLocalDir 'profile.json')) -replace '"ipd" : [0-9.]+', '"ipd" : 0.07'; [IO.File]::WriteAllText((Join-Path $HeadsetLocalDir 'profile.json'), $pjText)
     $old = Join-Path $ManifestDir 'local.384c724b.json'; $j = Get-Content $old -Raw | ConvertFrom-Json; $j.id = 'local.deadbeef'; $j.icon = ''
     [IO.File]::WriteAllText((Join-Path $ManifestDir 'local.deadbeef.json'), ($j | ConvertTo-Json -Compress), $Utf8NoBom); Remove-Item $old
     "  simulated wipe: Crysis image cleared, order emptied, Pistol Whip settings deleted, Flight Sim re-imported as local.deadbeef"
     $cmp = Compare-Snapshot $snap
-    "  detected lost -> images: $($cmp.Images -join ', '); order: $($cmp.Pins); settings: $($cmp.Settings -join ', ')"
+    "  detected lost -> images: $($cmp.Images -join ', '); order: $($cmp.Pins); settings: $($cmp.Settings -join ', '); headset: $(($cmp.Headset | Select-Object -Unique) -join ', ')"
     $script:restarts = 0
-    $r = Restore-Snapshot $snap $true $true $true
+    $script:fullRestarts = 0
+    $r = Restore-Snapshot $snap $true $true $true $true
+    "  headset restore: $($r.Headset) file(s), full runtime restart used: $($script:fullRestarts -eq 1); eye calibration back: $(@(Get-ChildItem $HeadsetLocalDir -Filter *.bin).Count -gt 0); play area back: $(@(Get-ChildItem $HeadsetProgramDir -Filter *.vrchap).Count -gt 0); IPD back to $ipdBefore : $((& $ipdOf) -eq $ipdBefore)"
     "  restore report: images $($r.Images), pinned $($r.Order), settings $($r.Settings), skipped: $($r.Skipped -join ', '); Pimax restarts: $script:restarts"
     $ci = (Get-Content $cm -Raw | ConvertFrom-Json).icon
     "  Crysis icon now: $([IO.Path]::GetFileName($ci)) (file exists: $(Test-Path $ci))"

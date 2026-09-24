@@ -69,13 +69,20 @@ Settings live in `%APPDATA%\Pimax\AppConfig` (`global.json` plus one file per ga
 
 ## Backup & restore
 
-Pimax updates sometimes reset library images, the library order or game settings. Pimax Game Manager keeps its own backups so you can put them back.
+Pimax updates sometimes reset library images, the library order, game settings or your headset setup. Pimax Game Manager keeps its own backups so you can put them back.
 
-![Backup & restore](screenshots/backup-restore-v1.4.0.png)
+What's backed up:
+
+- **Library images** for imported games
+- **Library order**
+- **Game settings**: global and per-game
+- **Headset settings**: eye-tracking calibration, the headset profile (IPD, custom FOV crop, Quad View fine-tuning, audio switching) and the play area / boundary
+
+![Backup & restore](screenshots/backup-restore-v1.5.0.png)
 
 - **Automatic backups:** every time you apply an image, save the library order or save game settings, and each time you open the app, a backup is saved (only when something changed). The newest 20 automatic backups are kept; ones you make with **Back up now** are kept until you delete them.
-- **Reset detection:** when the app opens it compares Pimax with your latest backup. If images, the order or settings files have gone missing, an orange bar offers to **Restore** them.
-- **Restore:** in **Backup & restore...**, pick a backup and choose what to restore: library images, library order, game settings, or any mix. Your current state is backed up first, so a restore can be undone. Games that were removed and imported again get a new ID in Pimax; they are matched by their .exe path.
+- **Reset detection:** when the app opens it compares Pimax with your latest backup. If images, the order, settings files or headset files (such as the eye-tracking calibration) have gone missing, an orange bar offers to **Restore** them.
+- **Restore:** in **Backup & restore...**, pick a backup and choose what to restore: library images, library order, game settings, headset settings, or any mix. Restoring headset settings briefly restarts the Pimax headset software (take the headset off first); it comes back on its own. Your current state is backed up first, so a restore can be undone. Games that were removed and imported again get a new ID in Pimax; they are matched by their .exe path.
 
 Backups are stored in %APPDATA%\PimaxGameManager\snapshots, outside Pimax's folders. Each one is a folder with the images, the settings files and a snapshot.json describing the library order and which image goes with which game.
 
@@ -109,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File .\PimaxGameManager.ps1
 
 ```powershell
 Install-Module ps2exe -Scope CurrentUser
-Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.4.3
+Invoke-ps2exe .\PimaxGameManager.ps1 .\PimaxGameManager.exe -iconFile .\PimaxGameManager.ico -noConsole -requireAdmin -STA -title "Pimax Game Manager" -version 1.5.0
 ```
 
 ## License
